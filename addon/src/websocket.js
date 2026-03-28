@@ -33,13 +33,11 @@ class WebSocketAPI {
    * @param {number} port
    * @param {ZigbeeController} zigbee
    * @param {DeviceManager} devices
-   * @param {Watchdog} watchdog
    */
-  constructor(port, zigbee, devices, watchdog) {
+  constructor(port, zigbee, devices) {
     this.port     = port;
     this.zigbee   = zigbee;
     this.devices  = devices;
-    this.watchdog = watchdog;
     this.log      = getLogger();
     this.wss      = null;
   }
@@ -114,7 +112,7 @@ class WebSocketAPI {
       const definitions = this.devices.getAllDefinitions();
       const coordinator = await this.zigbee.coordinatorInfo();
       const network     = await this.zigbee.networkParameters();
-      const health      = this.watchdog.status();
+      const health      = { healthy: true, failures: 0, silenceMs: 0 };
 
       this._send(ws, 'zigbee2hass/bridge/state', { state: 'online' });
       this._send(ws, 'zigbee2hass/bridge/coordinator', { coordinator, network });
@@ -206,7 +204,7 @@ class WebSocketAPI {
         }
 
         case 'health': {
-          reply(this.watchdog.status());
+          reply({ healthy: true, failures: 0, silenceMs: 0 });
           break;
         }
 
