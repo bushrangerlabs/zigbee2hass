@@ -29,9 +29,11 @@ async def _test_connection(host: str, port: int) -> str | None:
             # Just verify it opens — snapshot will come after
             pass
         return None
-    except OSError:
+    except OSError as exc:
+        _LOGGER.error("Cannot connect to Zigbee2HASS at %s: %s", uri, exc)
         return "cannot_connect"
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        _LOGGER.error("Unexpected error connecting to Zigbee2HASS at %s: %s", uri, exc)
         return "unknown"
 
 
