@@ -53,9 +53,7 @@ class ZigbeeController {
       network: {
         panID:        parseInt(this.config.pan_id, 16),
         channelList:  [this.config.channel],
-        networkKey:   this.config.network_key === 'GENERATE'
-                        ? undefined
-                        : this.config.network_key.split(',').map(Number),
+        networkKey:   this._resolveNetworkKey(),
       },
     };
 
@@ -83,6 +81,38 @@ class ZigbeeController {
     await this.stop();
     await new Promise(r => setTimeout(r, 2000));
     await this.start();
+  }
+
+  /**
+   * Resolve the network key:
+   * - If config is 'GENERATE', load from /data/network_key.json or generate+save a new one.
+   * - Otherwise parse the comma-separated or array value from config.
+   * @returns {number[]} 16-element byte array
+   */
+  _resolveNetworkKey() {
+    const keyFile = require('path').join(this.config.data_dir, 'network_key.json');
+    const fs = require('fs');
+
+    if (this.config.network_key === 'GENERATE') {
+      if (fs.existsSync(keyFile)) {
+        try {
+          const saved = JSON.parse(fs.readFileSync(keyFile, 'utf8'));
+          if (Array.isArray(saved) && saved.length === 16) {
+            this.log.info('[zigbee] Loaded persisted network key');
+            return saved;
+          }
+        } catch (_) { /* fall through to generate */ }
+      }
+      // Generate a new random 16-byte key
+      const key = Array.from({ length: 16 }, () => Math.floor(Math.random() * 256));
+      fs.writeFileSync(keyFile, JSON.stringify(key), 'utf8');
+      this.log.info('[zigbee] Generated and saved new network key');
+      return key;
+    }
+
+    // Explicit key: accept array or comma-separated string
+    if (Array.isArray(this.config.network_key)) return this.config.network_key;
+    return String(this.config.network_key).split(',').map(Number);
   }
 
   // ── Pairing ──────────────────────────────────────────────────────────────
