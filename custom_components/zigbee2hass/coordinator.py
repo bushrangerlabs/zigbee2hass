@@ -68,16 +68,16 @@ class Zigbee2HASSCoordinator:
     # ── Lifecycle ─────────────────────────────────────────────────────────
 
     async def async_start(self) -> None:
-        await self._client.start()
-        # Give the client a moment to connect for initial snapshot
         import asyncio
-        for _ in range(20):
+        await self._client.start()
+        # Wait up to 30s for the WebSocket connection to establish
+        for _ in range(120):
             if self._client.connected:
-                break
+                _LOGGER.debug("Connected to Zigbee2HASS add-on at %s:%s", self.host, self.port)
+                return
             await asyncio.sleep(0.25)
 
-        if not self._client.connected:
-            raise ConnectionError(f"Could not connect to Zigbee2HASS add-on at {self.host}:{self.port}")
+        raise ConnectionError(f"Timed out waiting for connection to Zigbee2HASS add-on at {self.host}:{self.port}")
 
     async def async_stop(self) -> None:
         await self._client.stop()

@@ -47,6 +47,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     try:
         await coordinator.async_start()
     except Exception as exc:
+        _LOGGER.error("Zigbee2HASS setup failed for %s:%s — %s", host, port, exc)
         raise ConfigEntryNotReady(f"Cannot connect to Zigbee2HASS add-on at {host}:{port}") from exc
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
