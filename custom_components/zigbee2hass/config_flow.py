@@ -16,7 +16,7 @@ from .const import DOMAIN, DEFAULT_PORT
 _LOGGER = logging.getLogger(__name__)
 
 STEP_USER_DATA_SCHEMA = vol.Schema({
-    vol.Required(CONF_HOST, default="localhost"): str,
+    vol.Required(CONF_HOST, default="local_zigbee2hass"): str,
     vol.Required(CONF_PORT, default=DEFAULT_PORT): int,
 })
 
@@ -90,3 +90,30 @@ class Zigbee2HASSConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 data=self._discovery_data,
             )
         return self.async_show_form(step_id="hassio_confirm")
+
+    async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Handle reconfiguration (allows fixing host/port on an existing entry)."""
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            host = user_input[CONF_HOST]
+            port = user_input[CONF_PORT]
+
+            error = await _test_connection(host, port)
+            if error:
+                errors["base"] = error
+            else:
+                return self.async_update_reload_and_abort(
+                    self._get_reconfigure_entry(),
+                    data_updates={CONF_HOST: host, CONF_PORT: port},
+                )
+
+        entry = self._get_reconfigure_entry()
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=vol.Schema({
+                vol.Required(CONF_HOST, default=entry.data.get(CONF_HOST, "local_zigbee2hass")): str,
+                vol.Required(CONF_PORT, default=entry.data.get(CONF_PORT, DEFAULT_PORT)): int,
+            }),
+            errors=errors,
+        )

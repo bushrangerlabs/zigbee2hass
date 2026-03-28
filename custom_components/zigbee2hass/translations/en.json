@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Connect to Zigbee2HASS Add-on",
-        "description": "Enter the host and port of the Zigbee2HASS add-on WebSocket API.\n\nIf running as an HA add-on, the host is **localhost** and the default port is **8756**.",
+        "description": "Enter the host and port of the Zigbee2HASS add-on WebSocket API.\n\nWhen running as a local HA add-on, use host **local_zigbee2hass** and port **8756**.",
         "data": {
           "host": "Host",
           "port": "WebSocket Port"
@@ -12,6 +12,14 @@
       "hassio_confirm": {
         "title": "Zigbee2HASS Add-on Detected",
         "description": "The Zigbee2HASS add-on has been detected. Click Submit to configure the integration."
+      },
+      "reconfigure": {
+        "title": "Reconfigure Zigbee2HASS",
+        "description": "Update the host and port. Use **local_zigbee2hass** as the host when running as a local HA add-on.",
+        "data": {
+          "host": "Host",
+          "port": "WebSocket Port"
+        }
       }
     },
     "error": {
