@@ -8,9 +8,11 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
-    LIGHT_LUX,
     PERCENTAGE,
+    UnitOfElectricCurrent,
+    UnitOfElectricPotential,
     UnitOfEnergy,
+    UnitOfIlluminance,
     UnitOfPower,
     UnitOfPressure,
     UnitOfTemperature,
@@ -26,16 +28,16 @@ from .entity_factory import exposes_to_platforms
 # Map herdsman unit strings → HA units + device class
 UNIT_MAP: dict[str, tuple[str | None, str | None, str | None]] = {
     # (HA unit, device_class, state_class)
-    "°C":   (UnitOfTemperature.CELSIUS,    SensorDeviceClass.TEMPERATURE,  SensorStateClass.MEASUREMENT),
-    "°F":   (UnitOfTemperature.FAHRENHEIT,  SensorDeviceClass.TEMPERATURE,  SensorStateClass.MEASUREMENT),
-    "%":    (PERCENTAGE,                    None,                           SensorStateClass.MEASUREMENT),
-    "hPa":  (UnitOfPressure.HPA,           SensorDeviceClass.PRESSURE,     SensorStateClass.MEASUREMENT),
-    "lux":  (LIGHT_LUX,                    SensorDeviceClass.ILLUMINANCE,  SensorStateClass.MEASUREMENT),
-    "W":    (UnitOfPower.WATT,             SensorDeviceClass.POWER,        SensorStateClass.MEASUREMENT),
-    "kWh":  (UnitOfEnergy.KILO_WATT_HOUR,  SensorDeviceClass.ENERGY,       SensorStateClass.TOTAL_INCREASING),
-    "V":    ("V",                           SensorDeviceClass.VOLTAGE,      SensorStateClass.MEASUREMENT),
-    "A":    ("A",                           SensorDeviceClass.CURRENT,      SensorStateClass.MEASUREMENT),
-    "ppm":  ("ppm",                         SensorDeviceClass.CO2,          SensorStateClass.MEASUREMENT),
+    "°C":   (UnitOfTemperature.CELSIUS,         SensorDeviceClass.TEMPERATURE,  SensorStateClass.MEASUREMENT),
+    "°F":   (UnitOfTemperature.FAHRENHEIT,       SensorDeviceClass.TEMPERATURE,  SensorStateClass.MEASUREMENT),
+    "%":    (PERCENTAGE,                         None,                            SensorStateClass.MEASUREMENT),
+    "hPa":  (UnitOfPressure.HPA,                SensorDeviceClass.PRESSURE,     SensorStateClass.MEASUREMENT),
+    "lux":  (UnitOfIlluminance.LUX,             SensorDeviceClass.ILLUMINANCE,  SensorStateClass.MEASUREMENT),
+    "W":    (UnitOfPower.WATT,                  SensorDeviceClass.POWER,        SensorStateClass.MEASUREMENT),
+    "kWh":  (UnitOfEnergy.KILO_WATT_HOUR,       SensorDeviceClass.ENERGY,       SensorStateClass.TOTAL_INCREASING),
+    "V":    (UnitOfElectricPotential.VOLT,       SensorDeviceClass.VOLTAGE,      SensorStateClass.MEASUREMENT),
+    "A":    (UnitOfElectricCurrent.AMPERE,       SensorDeviceClass.CURRENT,      SensorStateClass.MEASUREMENT),
+    "ppm":  ("ppm",                              SensorDeviceClass.CO2,          SensorStateClass.MEASUREMENT),
 }
 
 # Battery sensor special case
