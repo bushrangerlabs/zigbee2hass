@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Connect to Zigbee2HASS Add-on",
-        "description": "Enter the host and port of the Zigbee2HASS add-on WebSocket API.\n\nWhen running as a local HA add-on, use host **local_zigbee2hass** and port **8756**.",
+        "description": "Enter the host and port of the Zigbee2HASS add-on WebSocket API.\n\nWhen running as a local HA add-on, use host **zigbee2hass** and port **8756**.",
         "data": {
           "host": "Host",
           "port": "WebSocket Port"

@@ -16,7 +16,7 @@ from .const import DOMAIN, DEFAULT_PORT
 _LOGGER = logging.getLogger(__name__)
 
 STEP_USER_DATA_SCHEMA = vol.Schema({
-    vol.Required(CONF_HOST, default="local_zigbee2hass"): str,
+    vol.Required(CONF_HOST, default="zigbee2hass"): str,
     vol.Required(CONF_PORT, default=DEFAULT_PORT): int,
 })
 
@@ -112,7 +112,7 @@ class Zigbee2HASSConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="reconfigure",
             data_schema=vol.Schema({
-                vol.Required(CONF_HOST, default=entry.data.get(CONF_HOST, "local_zigbee2hass")): str,
+                vol.Required(CONF_HOST, default=entry.data.get(CONF_HOST, "zigbee2hass")): str,
                 vol.Required(CONF_PORT, default=entry.data.get(CONF_PORT, DEFAULT_PORT)): int,
             }),
             errors=errors,
