@@ -168,25 +168,9 @@ async function main() {
 
   const zigbee  = new ZigbeeController(config, emit);
   const devices = new DeviceManager(config, zigbee, emit);
-  const watchdog = new Watchdog({
-    silenceThreshold: Math.max((config.availability_ping_interval ?? 60) * 4 * 1000, 300_000),
-    checkInterval:    30_000,
-    maxFailures:      3,
-    onReconnect: () => zigbee.reconnect(),
-    onFailed:    () => wsApi.broadcast('zigbee2hass/bridge/state', { state: 'coordinator_failed' }),
-    onHealthy:   () => wsApi.broadcast('zigbee2hass/bridge/state', { state: 'online' }),
-  });
-  const wsApi   = new WebSocketAPI(config.websocket_port, zigbee, devices, watchdog);
+  const wsApi   = new WebSocketAPI(config.websocket_port, zigbee, devices);
 
   // ── Wire events ─────────────────────────────────────────────────────────
-
-  // Watchdog heartbeat on any Zigbee activity
-  on('device_message',   () => watchdog.heartbeat());
-  on('device_announce',  () => watchdog.heartbeat());
-  on('device_joined',    () => watchdog.heartbeat());
-
-  // Periodic coordinator keepalive so watchdog heartbeats even with no devices
-  let keepaliveTimer = null;
 
   // Device lifecycle
   on('device_interview_succeeded', (device) => {
@@ -201,9 +185,9 @@ async function main() {
   });
 
   // Forward events to WebSocket clients
-  on('device_joined',     (d) => wsApi.broadcast('zigbee2hass/device/joined',       d));
-  on('device_ready',      (d) => wsApi.broadcast('zigbee2hass/device/ready',        d));
-  on('state_changed',     (d) => wsApi.broadcast('zigbee2hass/device/state',        d));
+  on('device_joined',        (d) => wsApi.broadcast('zigbee2hass/device/joined',       d));
+  on('device_ready',         (d) => wsApi.broadcast('zigbee2hass/device/ready',        d));
+  on('state_changed',        (d) => wsApi.broadcast('zigbee2hass/device/state',        d));
   on('availability_changed', (d) => wsApi.broadcast('zigbee2hass/device/availability', d));
   on('permit_join_changed',  (d) => wsApi.broadcast('zigbee2hass/permitjoin',          d));
 
@@ -225,20 +209,7 @@ async function main() {
   try {
     await zigbee.start();
     devices.start();
-    watchdog.start();
     wsApi.start();
-
-    // Keepalive: ping coordinator every availability_ping_interval seconds
-    // so the watchdog heartbeats even when no Zigbee devices are transmitting
-    const pingIntervalMs = (config.availability_ping_interval ?? 60) * 1000;
-    keepaliveTimer = setInterval(async () => {
-      try {
-        await zigbee.ping();
-        watchdog.heartbeat();
-      } catch (err) {
-        log.warn(`[main] Coordinator keepalive ping failed: ${err.message}`);
-      }
-    }, pingIntervalMs);
 
     // Initial backup after coordinator starts
     if (config.nvram_backup) {
@@ -261,10 +232,8 @@ async function main() {
     wsApi.broadcast('zigbee2hass/bridge/state', { state: 'offline' });
 
     if (nvramTimer) clearInterval(nvramTimer);
-    if (keepaliveTimer) clearInterval(keepaliveTimer);
 
     wsApi.stop();
-    watchdog.stop();
     devices.stop();
 
     // Final NVRam backup before shutting down coordinator
