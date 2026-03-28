@@ -5,7 +5,6 @@ import logging
 from typing import Any
 
 import voluptuous as vol
-import websockets
 
 from homeassistant import config_entries
 from homeassistant.config_entries import ConfigFlowResult
@@ -21,22 +20,6 @@ STEP_USER_DATA_SCHEMA = vol.Schema({
 })
 
 
-async def _test_connection(host: str, port: int) -> str | None:
-    """Try to connect to the add-on WebSocket. Returns error key or None."""
-    uri = f"ws://{host}:{port}"
-    try:
-        async with websockets.connect(uri, open_timeout=5) as ws:
-            # Just verify it opens — snapshot will come after
-            pass
-        return None
-    except OSError as exc:
-        _LOGGER.error("Cannot connect to Zigbee2HASS at %s: %s", uri, exc)
-        return "cannot_connect"
-    except Exception as exc:  # noqa: BLE001
-        _LOGGER.error("Unexpected error connecting to Zigbee2HASS at %s: %s", uri, exc)
-        return "unknown"
-
-
 class Zigbee2HASSConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Zigbee2HASS."""
 
@@ -44,8 +27,6 @@ class Zigbee2HASSConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Handle the initial step."""
-        errors: dict[str, str] = {}
-
         if user_input is not None:
             host = user_input[CONF_HOST]
             port = user_input[CONF_PORT]
@@ -54,19 +35,14 @@ class Zigbee2HASSConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             await self.async_set_unique_id(f"{host}:{port}")
             self._abort_if_unique_id_configured()
 
-            error = await _test_connection(host, port)
-            if error:
-                errors["base"] = error
-            else:
-                return self.async_create_entry(
-                    title=f"Zigbee2HASS ({host}:{port})",
-                    data={CONF_HOST: host, CONF_PORT: port},
-                )
+            return self.async_create_entry(
+                title=f"Zigbee2HASS ({host}:{port})",
+                data={CONF_HOST: host, CONF_PORT: port},
+            )
 
         return self.async_show_form(
             step_id="user",
             data_schema=STEP_USER_DATA_SCHEMA,
-            errors=errors,
             description_placeholders={"default_port": str(DEFAULT_PORT)},
         )
 
@@ -95,20 +71,14 @@ class Zigbee2HASSConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Handle reconfiguration (allows fixing host/port on an existing entry)."""
-        errors: dict[str, str] = {}
-
         if user_input is not None:
             host = user_input[CONF_HOST]
             port = user_input[CONF_PORT]
 
-            error = await _test_connection(host, port)
-            if error:
-                errors["base"] = error
-            else:
-                return self.async_update_reload_and_abort(
-                    self._get_reconfigure_entry(),
-                    data_updates={CONF_HOST: host, CONF_PORT: port},
-                )
+            return self.async_update_reload_and_abort(
+                self._get_reconfigure_entry(),
+                data_updates={CONF_HOST: host, CONF_PORT: port},
+            )
 
         entry = self._get_reconfigure_entry()
         return self.async_show_form(
@@ -117,5 +87,4 @@ class Zigbee2HASSConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_HOST, default=entry.data.get(CONF_HOST, "zigbee2hass")): str,
                 vol.Required(CONF_PORT, default=entry.data.get(CONF_PORT, DEFAULT_PORT)): int,
             }),
-            errors=errors,
         )
