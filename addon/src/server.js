@@ -56,6 +56,9 @@ async function main() {
   on('device_interview_succeeded', (device) => {
     devices.onDeviceInterview(device);
   });
+  on('device_announce', (rawDevice) => {
+    devices.onDeviceAnnounce(rawDevice);
+  });
   on('device_message', (msg) => {
     devices.onMessage(msg);
   });

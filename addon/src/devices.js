@@ -45,7 +45,7 @@ class DeviceManager {
     for (const rawDevice of this.zigbee.getRawDevices()) {
       const ieee = rawDevice.ieeeAddr;
       if (rawDevice.type === 'Coordinator') continue;
-      const definition = require('zigbee-herdsman-converters').findByDevice(rawDevice);
+      const definition = zhc.findByDevice(rawDevice);
       if (definition) {
         this._definitions.set(ieee, definition);
         this.log.info(`[devices] Loaded definition for ${ieee}: ${definition.model}`);
@@ -72,6 +72,38 @@ class DeviceManager {
   }
 
   // ── Device handling ───────────────────────────────────────────────────────
+
+  /**
+   * Called when an already-interviewed device announces itself (re-join / power-on).
+   * The device is already in herdsman DB; we just need to fire device_ready.
+   */
+  onDeviceAnnounce(rawDevice) {
+    const ieee = rawDevice.ieeeAddr;
+    if (rawDevice.type === 'Coordinator') return;
+
+    // Re-run findByDevice in case it wasn't loaded at startup
+    if (!this._definitions.has(ieee)) {
+      const definition = zhc.findByDevice(rawDevice);
+      if (definition) {
+        this._definitions.set(ieee, definition);
+        this.log.info(`[devices] Definition found on announce for ${ieee}: ${definition.model}`);
+      } else {
+        this.log.warn(`[devices] No definition on announce for ${ieee} (${rawDevice.modelID})`);
+      }
+    }
+
+    if (!this._state.has(ieee)) this._state.set(ieee, {});
+    if (!this._availability.has(ieee)) this._availability.set(ieee, { available: true, last_seen: Date.now() });
+    else this._availability.get(ieee).available = true;
+
+    const definition = this._definitions.get(ieee);
+    this.log.info(`[devices] Device announced: ${ieee} (${rawDevice.modelID})`);
+
+    this.emit('device_ready', {
+      device: this.zigbee.serializeDevice(rawDevice),
+      definition: definition ? this._serializeDefinition(definition) : null,
+    });
+  }
 
   /**
    * Called when a device successfully completes interview.

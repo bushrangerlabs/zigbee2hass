@@ -205,7 +205,7 @@ class ZigbeeController {
       if (d.status === 'successful') this.emit('device_interview_succeeded', d.device);
       else                           this.emit('device_interview_failed',    this._serializeDevice(d.device));
     });
-    h.on('deviceAnnounce',          (d)    => this.emit('device_announce',            this._serializeDevice(d.device)));
+    h.on('deviceAnnounce',          (d)    => this.emit('device_announce',            d.device));  // raw device for definition lookup
     h.on('deviceLeave',             (d)    => this.emit('device_leave',               { ieee_address: d.ieeeAddr }));
     h.on('message',                 (msg)  => this.emit('device_message',             this._normalizeMessage(msg)));
     h.on('permitJoinChanged',       (d)    => this.emit('permit_join_changed',        d));
