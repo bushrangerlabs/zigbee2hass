@@ -8,8 +8,8 @@ import voluptuous as vol
 import websockets
 
 from homeassistant import config_entries
+from homeassistant.config_entries import ConfigFlowResult
 from homeassistant.const import CONF_HOST, CONF_PORT
-from homeassistant.data_entry_flow import FlowResult
 
 from .const import DOMAIN, DEFAULT_PORT
 
@@ -40,7 +40,7 @@ class Zigbee2HASSConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     VERSION = 1
 
-    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Handle the initial step."""
         errors: dict[str, str] = {}
 
@@ -68,7 +68,7 @@ class Zigbee2HASSConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             description_placeholders={"default_port": str(DEFAULT_PORT)},
         )
 
-    async def async_step_hassio(self, discovery_info: Any) -> FlowResult:
+    async def async_step_hassio(self, discovery_info: Any) -> ConfigFlowResult:
         """Handle add-on auto-discovery via the Supervisor."""
         # When installed as an HA add-on, the Supervisor can auto-discover it
         host = discovery_info.config.get("host", "localhost")
@@ -82,7 +82,7 @@ class Zigbee2HASSConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return await self.async_step_hassio_confirm()
 
-    async def async_step_hassio_confirm(self, user_input: dict | None = None) -> FlowResult:
+    async def async_step_hassio_confirm(self, user_input: dict | None = None) -> ConfigFlowResult:
         """Confirm add-on discovery."""
         if user_input is not None:
             return self.async_create_entry(
