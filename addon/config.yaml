@@ -51,8 +51,5 @@ schema:
   nvram_backup: bool
   nvram_backup_interval: int
 
-map:
-  - share/zigbee2hass:/data
-
 environment:
   TZ: UTC
