@@ -6,7 +6,7 @@ from typing import Any
 
 from homeassistant.components.light import (
     ATTR_BRIGHTNESS,
-    ATTR_COLOR_TEMP,
+    ATTR_COLOR_TEMP_KELVIN,
     ATTR_HS_COLOR,
     ATTR_RGB_COLOR,
     ATTR_XY_COLOR,
@@ -97,8 +97,12 @@ class Zigbee2HASSLight(Zigbee2HASSEntity, LightEntity):
         return int(val) if val is not None else None
 
     @property
-    def color_temp(self) -> int | None:
-        return self._get_state_value("color_temp")
+    def color_temp_kelvin(self) -> int | None:
+        """Return color temperature in Kelvin (HA 2024+ standard)."""
+        mireds = self._get_state_value("color_temp")
+        if mireds is not None and int(mireds) > 0:
+            return round(1_000_000 / int(mireds))
+        return None
 
     @property
     def hs_color(self) -> tuple[float, float] | None:
@@ -112,8 +116,9 @@ class Zigbee2HASSLight(Zigbee2HASSEntity, LightEntity):
 
         if ATTR_BRIGHTNESS in kwargs:
             payload["brightness"] = kwargs[ATTR_BRIGHTNESS]
-        if ATTR_COLOR_TEMP in kwargs:
-            payload["color_temp"] = kwargs[ATTR_COLOR_TEMP]
+        if ATTR_COLOR_TEMP_KELVIN in kwargs:
+            kelvin = kwargs[ATTR_COLOR_TEMP_KELVIN]
+            payload["color_temp"] = round(1_000_000 / kelvin)  # convert to mireds for device
         if ATTR_HS_COLOR in kwargs:
             h, s = kwargs[ATTR_HS_COLOR]
             payload["color"] = {"hue": h, "saturation": s}
