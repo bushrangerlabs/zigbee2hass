@@ -42,21 +42,32 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     host = entry.data["host"]
     port = entry.data["port"]
 
+    _LOGGER.debug("Zigbee2HASS setup starting for %s:%s", host, port)
+
     coordinator = Zigbee2HASSCoordinator(hass, entry, host, port)
 
     try:
         await coordinator.async_start()
     except Exception as exc:
-        _LOGGER.error("Zigbee2HASS setup failed for %s:%s — %s", host, port, exc)
+        _LOGGER.error("Zigbee2HASS connect failed for %s:%s — %s", host, port, exc, exc_info=True)
         raise ConfigEntryNotReady(f"Cannot connect to Zigbee2HASS add-on at {host}:{port}") from exc
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    async_register_services(hass)
+    try:
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    except Exception as exc:
+        _LOGGER.error("Zigbee2HASS platform setup failed — %s", exc, exc_info=True)
+        raise ConfigEntryNotReady(f"Platform setup failed: {exc}") from exc
+
+    try:
+        async_register_services(hass)
+    except Exception as exc:
+        _LOGGER.error("Zigbee2HASS service registration failed — %s", exc, exc_info=True)
 
     entry.async_on_unload(entry.add_update_listener(async_update_options))
 
+    _LOGGER.info("Zigbee2HASS setup complete for %s:%s", host, port)
     return True
 
 
