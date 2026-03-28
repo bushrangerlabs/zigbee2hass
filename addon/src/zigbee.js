@@ -158,13 +158,18 @@ class ZigbeeController {
   }
 
   /** Ping a device — returns latency in ms or throws on timeout */
-  async ping(ieeeAddr) {
+  async pingDevice(ieeeAddr) {
     const device = this.herdsman.getDeviceByIeeeAddr(ieeeAddr);
     if (!device) throw new Error(`Device ${ieeeAddr} not found`);
 
     const start = Date.now();
     await device.ping();
     return Date.now() - start;
+  }
+
+  /** Ping the coordinator itself — proves ZNP serial link is alive */
+  async ping() {
+    await this.herdsman.getCoordinatorVersion();
   }
 
   // ── NVRam backup ──────────────────────────────────────────────────────────

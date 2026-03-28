@@ -180,7 +180,7 @@ class WebSocketAPI {
 
         case 'ping_device': {
           const { ieee_address } = payload;
-          const latency = await this.zigbee.ping(ieee_address);
+          const latency = await this.zigbee.pingDevice(ieee_address);
           reply({ latency_ms: latency });
           break;
         }
