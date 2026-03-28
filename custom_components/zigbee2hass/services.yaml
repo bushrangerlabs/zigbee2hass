@@ -1,0 +1,51 @@
+permit_join:
+  name: Permit Join
+  description: Open or close the Zigbee network for new devices to join.
+  fields:
+    permit:
+      name: Permit
+      description: True to open the network, False to close it.
+      required: false
+      default: true
+      selector:
+        boolean:
+    timeout:
+      name: Timeout
+      description: Seconds to keep the network open (1–254).
+      required: false
+      default: 254
+      selector:
+        number:
+          min: 1
+          max: 254
+          unit_of_measurement: seconds
+
+ping_device:
+  name: Ping Device
+  description: Ping a Zigbee device and log the round-trip latency.
+  fields:
+    ieee_address:
+      name: IEEE Address
+      description: The IEEE address of the device to ping (e.g. 0x00124b0025791ded).
+      required: true
+      selector:
+        text:
+
+backup:
+  name: Backup Coordinator
+  description: Trigger an immediate NVRam backup of the Zigbee coordinator.
+
+restart_addon:
+  name: Restart Controller
+  description: Restart the Zigbee controller inside the add-on.
+
+migrate_from_z2m:
+  name: Migrate from Zigbee2MQTT
+  description: Import devices and network key from an existing Zigbee2MQTT data directory.
+  fields:
+    z2m_data_dir:
+      name: Z2M Data Directory
+      description: Path to the Zigbee2MQTT data directory inside the add-on (e.g. /share/zigbee2mqtt).
+      required: true
+      selector:
+        text:

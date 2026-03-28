@@ -8,6 +8,7 @@ Manages:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections import defaultdict
 from collections.abc import Callable
@@ -57,6 +58,9 @@ class Zigbee2HASSCoordinator:
         # Device-specific state subscribers: ieee_address → list of callbacks
         self._device_subscribers: dict[str, list[Callable]] = defaultdict(list)
 
+        # Set when the first bridge/devices snapshot arrives
+        self._snapshot_event: asyncio.Event | None = None
+
         self._client = Zigbee2HASSClient(
             host=host,
             port=port,
@@ -68,16 +72,24 @@ class Zigbee2HASSCoordinator:
     # ── Lifecycle ─────────────────────────────────────────────────────────
 
     async def async_start(self) -> None:
-        import asyncio
+        self._snapshot_event = asyncio.Event()
         await self._client.start()
-        # Wait up to 30s for the WebSocket connection to establish
+        # Wait up to 30s for TCP connect
         for _ in range(120):
             if self._client.connected:
                 _LOGGER.debug("Connected to Zigbee2HASS add-on at %s:%s", self.host, self.port)
-                return
+                break
             await asyncio.sleep(0.25)
+        else:
+            raise ConnectionError(f"Timed out waiting for connection to Zigbee2HASS add-on at {self.host}:{self.port}")
 
-        raise ConnectionError(f"Timed out waiting for connection to Zigbee2HASS add-on at {self.host}:{self.port}")
+        # Wait up to 10s for the device snapshot to arrive so coordinator.devices
+        # is populated before platform async_setup_entry iterates it.
+        try:
+            await asyncio.wait_for(self._snapshot_event.wait(), timeout=10.0)
+            _LOGGER.debug("Device snapshot received — %d devices", len(self.devices))
+        except asyncio.TimeoutError:
+            _LOGGER.warning("Device snapshot not received within 10s; continuing with empty device list")
 
     async def async_stop(self) -> None:
         await self._client.stop()
@@ -182,6 +194,10 @@ class Zigbee2HASSCoordinator:
                 "available":  device_data.get("available", False),
             }
         _LOGGER.info("Snapshot received: %d devices", len(self.devices))
+
+        # Unblock async_start() if it's still waiting
+        if self._snapshot_event and not self._snapshot_event.is_set():
+            self._snapshot_event.set()
 
         # Trigger platform setup for new devices
         self.hass.bus.fire(f"{DOMAIN}_devices_loaded", {"entry_id": self.entry.entry_id})
