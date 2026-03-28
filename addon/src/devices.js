@@ -41,6 +41,21 @@ class DeviceManager {
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
   start() {
+    // Load definitions for already-paired devices from herdsman database
+    for (const rawDevice of this.zigbee.getRawDevices()) {
+      const ieee = rawDevice.ieeeAddr;
+      if (rawDevice.type === 'Coordinator') continue;
+      const definition = require('zigbee-herdsman-converters').findByDevice(rawDevice);
+      if (definition) {
+        this._definitions.set(ieee, definition);
+        this.log.info(`[devices] Loaded definition for ${ieee}: ${definition.model}`);
+      } else {
+        this.log.warn(`[devices] No definition for ${ieee} (${rawDevice.modelID}) — will retry on interview`);
+      }
+      if (!this._state.has(ieee)) this._state.set(ieee, {});
+      if (!this._availability.has(ieee)) this._availability.set(ieee, { available: true, last_seen: Date.now() });
+    }
+
     // Start availability polling for mains-powered devices
     this._availabilityTimer = setInterval(
       () => this._checkAvailability(),
@@ -62,19 +77,22 @@ class DeviceManager {
    * Called when a device successfully completes interview.
    * Look up its definition in zigbee-herdsman-converters and cache it.
    */
-  onDeviceInterview(device) {
-    const definition = zhc.findByDevice(device);
+  onDeviceInterview(rawDevice) {
+    // rawDevice is the herdsman Device instance — required by zhc.findByDevice
+    const definition = zhc.findByDevice(rawDevice);
+    const ieee = rawDevice.ieeeAddr;
+
     if (definition) {
-      this._definitions.set(device.ieee_address, definition);
-      this.log.info(`[devices] Definition found for ${device.ieee_address}: ${definition.model}`);
+      this._definitions.set(ieee, definition);
+      this.log.info(`[devices] Definition found for ${ieee}: ${definition.model}`);
     } else {
-      this.log.warn(`[devices] No definition found for ${device.ieee_address} (${device.model_id})`);
+      this.log.warn(`[devices] No definition found for ${ieee} (${rawDevice.modelID})`);
     }
-    this._state.set(device.ieee_address, {});
-    this._availability.set(device.ieee_address, { available: true, last_seen: Date.now() });
+    this._state.set(ieee, {});
+    this._availability.set(ieee, { available: true, last_seen: Date.now() });
 
     this.emit('device_ready', {
-      device,
+      device: this.zigbee.serializeDevice(rawDevice),
       definition: definition ? this._serializeDefinition(definition) : null,
     });
   }

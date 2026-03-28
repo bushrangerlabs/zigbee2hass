@@ -128,6 +128,10 @@ class ZigbeeController {
     return this.herdsman.getDevices().map(d => this._serializeDevice(d));
   }
 
+  getRawDevices() {
+    return this.herdsman.getDevices();
+  }
+
   getDevice(ieeeAddr) {
     const d = this.herdsman.getDeviceByIeeeAddr(ieeeAddr);
     return d ? this._serializeDevice(d) : null;
@@ -197,7 +201,8 @@ class ZigbeeController {
     h.on('deviceJoined',            (d)    => this.emit('device_joined',              this._serializeDevice(d.device)));
     h.on('deviceInterviewStarted',  (d)    => this.emit('device_interview_started',   this._serializeDevice(d.device)));
     h.on('deviceInterview',         (d)    => {
-      if (d.status === 'successful') this.emit('device_interview_succeeded', this._serializeDevice(d.device));
+      // Pass the raw herdsman Device so zhc.findByDevice() can match it correctly
+      if (d.status === 'successful') this.emit('device_interview_succeeded', d.device);
       else                           this.emit('device_interview_failed',    this._serializeDevice(d.device));
     });
     h.on('deviceAnnounce',          (d)    => this.emit('device_announce',            this._serializeDevice(d.device)));
@@ -205,6 +210,10 @@ class ZigbeeController {
     h.on('message',                 (msg)  => this.emit('device_message',             this._normalizeMessage(msg)));
     h.on('permitJoinChanged',       (d)    => this.emit('permit_join_changed',        d));
     h.on('lastSeenChanged',         (d)    => this.emit('last_seen_changed',          { ieee_address: d.device.ieeeAddr, last_seen: d.device.lastSeen }));
+  }
+
+  serializeDevice(device) {
+    return this._serializeDevice(device);
   }
 
   _serializeDevice(device) {
