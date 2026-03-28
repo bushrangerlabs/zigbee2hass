@@ -1,15 +1,15 @@
 ARG BUILD_FROM
 FROM $BUILD_FROM
 
-# Build tools needed for native node addons (serialport, etc.)
-RUN apk add --no-cache python3 make g++ linux-headers udev
+# Install Node.js 20 and build tools for native addons (serialport, etc.)
+RUN apk add --no-cache nodejs npm python3 make g++ linux-headers udev
 
 WORKDIR /app
 
 # Copy package files first for layer caching
 COPY package.json ./
 
-# Install dependencies
+# Install production dependencies
 RUN npm install --omit=dev
 
 # Copy source
