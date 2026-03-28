@@ -1,0 +1,5 @@
+[build]
+squash = false
+
+[labels]
+addon = "Zigbee2HASS"

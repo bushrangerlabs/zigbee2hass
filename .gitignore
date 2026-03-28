@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Data files (user-specific)
+addon/data/
+*.db
+*.db.bak
+coordinator_backup.json
+nvbackup.json
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Editor
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Secrets
+.env
+secrets.yaml

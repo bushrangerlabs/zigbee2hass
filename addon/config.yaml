@@ -1,0 +1,58 @@
+name: "Zigbee2HASS"
+description: "Reliable Zigbee for Home Assistant via zigbee-herdsman. No MQTT required."
+version: "0.1.0"
+slug: "zigbee2hass"
+url: "https://github.com/bushrangerlabs/zigbee2hass"
+arch:
+  - aarch64
+  - amd64
+  - armhf
+  - armv7
+startup: services
+boot: auto
+init: false
+uart: true
+usb: true
+
+ports:
+  8756/tcp: 8756
+ports_description:
+  8756/tcp: "Zigbee2HASS WebSocket API"
+
+options:
+  serial_port: "/dev/ttyUSB0"
+  adapter: "auto"
+  channel: 11
+  pan_id: "0x1a62"
+  network_key: "GENERATE"
+  transmit_power: 20
+  websocket_port: 8756
+  log_level: "info"
+  availability_timeout: 300
+  availability_ping_interval: 60
+  command_timeout: 5000
+  command_retries: 3
+  nvram_backup: true
+  nvram_backup_interval: 3600
+
+schema:
+  serial_port: str
+  adapter: "list(auto|zstack|deconz|ezsp|zigate)"
+  channel: "int(11,26)"
+  pan_id: str
+  network_key: str
+  transmit_power: "int(0,20)"
+  websocket_port: port
+  log_level: "list(debug|info|warning|error)"
+  availability_timeout: int
+  availability_ping_interval: int
+  command_timeout: int
+  command_retries: "int(1,10)"
+  nvram_backup: bool
+  nvram_backup_interval: int
+
+map:
+  - share/zigbee2hass:/data
+
+environment:
+  TZ: UTC

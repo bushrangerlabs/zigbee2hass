@@ -1,0 +1,90 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Zigbee2HASS Add-on",
+        "description": "Enter the host and port of the Zigbee2HASS add-on WebSocket API.\n\nIf running as an HA add-on, the host is **localhost** and the default port is **8756**.",
+        "data": {
+          "host": "Host",
+          "port": "WebSocket Port"
+        }
+      },
+      "hassio_confirm": {
+        "title": "Zigbee2HASS Add-on Detected",
+        "description": "The Zigbee2HASS add-on has been detected. Click Submit to configure the integration."
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not connect to the Zigbee2HASS add-on. Make sure it is installed and running.",
+      "unknown": "An unexpected error occurred. Check the logs for details."
+    },
+    "abort": {
+      "already_configured": "Zigbee2HASS is already configured."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "battery": {"name": "Battery"},
+      "temperature": {"name": "Temperature"},
+      "humidity": {"name": "Humidity"},
+      "pressure": {"name": "Pressure"},
+      "illuminance": {"name": "Illuminance"},
+      "power": {"name": "Power"},
+      "energy": {"name": "Energy"},
+      "link_quality": {"name": "Link Quality"}
+    },
+    "binary_sensor": {
+      "occupancy": {"name": "Occupancy"},
+      "contact": {"name": "Contact"},
+      "water_leak": {"name": "Water Leak"},
+      "smoke": {"name": "Smoke"},
+      "gas": {"name": "Gas"},
+      "vibration": {"name": "Vibration"},
+      "presence": {"name": "Presence"}
+    }
+  },
+  "services": {
+    "permit_join": {
+      "name": "Permit Join",
+      "description": "Allow new Zigbee devices to join the network.",
+      "fields": {
+        "permit": {
+          "name": "Permit",
+          "description": "True to open the network, False to close it."
+        },
+        "timeout": {
+          "name": "Timeout",
+          "description": "Seconds to keep the network open (1-254)."
+        }
+      }
+    },
+    "ping_device": {
+      "name": "Ping Device",
+      "description": "Ping a Zigbee device and return its latency.",
+      "fields": {
+        "ieee_address": {
+          "name": "IEEE Address",
+          "description": "The IEEE address of the device to ping (e.g. 0x00158d0001234567)."
+        }
+      }
+    },
+    "backup": {
+      "name": "NVRam Backup",
+      "description": "Trigger an immediate coordinator NVRam backup."
+    },
+    "migrate_from_z2m": {
+      "name": "Migrate from Zigbee2MQTT",
+      "description": "Import devices and coordinator backup from a Zigbee2MQTT data directory.",
+      "fields": {
+        "z2m_data_dir": {
+          "name": "Z2M Data Directory",
+          "description": "Path to the Zigbee2MQTT data directory (e.g. /share/zigbee2mqtt)."
+        }
+      }
+    },
+    "restart_addon": {
+      "name": "Restart Add-on",
+      "description": "Restart the Zigbee controller in the add-on."
+    }
+  }
+}

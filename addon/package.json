@@ -1,0 +1,21 @@
+{
+  "name": "zigbee2hass-addon",
+  "version": "0.1.0",
+  "description": "Zigbee2HASS add-on — zigbee-herdsman WebSocket bridge for Home Assistant",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "dependencies": {
+    "zigbee-herdsman": "^9.0.0",
+    "zigbee-herdsman-converters": "^25.0.0",
+    "ws": "^8.18.0",
+    "ajv": "^8.17.1",
+    "winston": "^3.17.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "license": "MIT"
+}

@@ -1,0 +1,208 @@
+'use strict';
+
+const path = require('path');
+const { Controller } = require('zigbee-herdsman');
+const { getLogger }  = require('./logger');
+
+/**
+ * ZigbeeController wraps zigbee-herdsman's Controller.
+ *
+ * Responsibilities:
+ *  - Start/stop the coordinator
+ *  - Emit normalised events upward (device_joined, device_interview_started,
+ *    device_interview_succeeded, device_interview_failed, device_leave,
+ *    device_message, device_announce)
+ *  - Provide helpers: permitJoin, ping, publish, getDevices, getDevice
+ *  - NVRam backup/restore
+ */
+class ZigbeeController {
+  /**
+   * @param {object} config  - loaded config from config.js
+   * @param {function} emit  - fn(event, payload) called for every Zigbee event
+   */
+  constructor(config, emit) {
+    this.config    = config;
+    this.emit      = emit;
+    this.log       = getLogger();
+    this.herdsman  = null;
+    this._starting = false;
+  }
+
+  async start() {
+    if (this._starting) return;
+    this._starting = true;
+
+    const dbPath     = path.join(this.config.data_dir, 'database.db');
+    const backupPath = path.join(this.config.data_dir, 'coordinator_backup.json');
+
+    const herdsmanConfig = {
+      serialPort: {
+        path:    this.config.serial_port,
+        adapter: this.config.adapter === 'auto' ? undefined : this.config.adapter,
+      },
+      databasePath:            dbPath,
+      databaseBackupPath:      dbPath + '.bak',
+      backupPath:              backupPath,
+      acceptJoiningDeviceHandler: () => true,
+      adapter: {
+        concurrent:     16,
+        delay:          0,
+        disableLED:     false,
+        transmitPower:  this.config.transmit_power,
+      },
+      network: {
+        panID:        parseInt(this.config.pan_id, 16),
+        channelList:  [this.config.channel],
+        networkKey:   this.config.network_key === 'GENERATE'
+                        ? undefined
+                        : this.config.network_key.split(',').map(Number),
+      },
+    };
+
+    this.log.info('[zigbee] Starting coordinator...', { port: this.config.serial_port });
+
+    this.herdsman = new Controller(herdsmanConfig, this.log);
+    this._attachEvents();
+
+    await this.herdsman.start();
+
+    this.log.info('[zigbee] Coordinator started');
+    this._starting = false;
+  }
+
+  async stop() {
+    if (!this.herdsman) return;
+    this.log.info('[zigbee] Stopping coordinator...');
+    await this.herdsman.stop();
+    this.herdsman = null;
+    this.log.info('[zigbee] Coordinator stopped');
+  }
+
+  async reconnect() {
+    this.log.info('[zigbee] Reconnecting...');
+    await this.stop();
+    await new Promise(r => setTimeout(r, 2000));
+    await this.start();
+  }
+
+  // ── Pairing ──────────────────────────────────────────────────────────────
+
+  async permitJoin(permit, device = undefined, timeout = 254) {
+    await this.herdsman.permitJoin(permit, device, timeout);
+    this.log.info(`[zigbee] Permit join: ${permit}`);
+  }
+
+  // ── Device access ─────────────────────────────────────────────────────────
+
+  getDevices() {
+    return this.herdsman.getDevices().map(d => this._serializeDevice(d));
+  }
+
+  getDevice(ieeeAddr) {
+    const d = this.herdsman.getDeviceByIeeeAddr(ieeeAddr);
+    return d ? this._serializeDevice(d) : null;
+  }
+
+  // ── Commands ──────────────────────────────────────────────────────────────
+
+  /**
+   * Publish a state/command to a device endpoint.
+   * Returns a Promise that resolves when herdsman acknowledges the publish.
+   */
+  async publish(ieeeAddr, endpoint, cluster, command, payload) {
+    const device = this.herdsman.getDeviceByIeeeAddr(ieeeAddr);
+    if (!device) throw new Error(`Device ${ieeeAddr} not found`);
+
+    const ep = device.getEndpoint(endpoint);
+    if (!ep) throw new Error(`Endpoint ${endpoint} not found on ${ieeeAddr}`);
+
+    return ep.command(cluster, command, payload);
+  }
+
+  async readAttribute(ieeeAddr, endpoint, cluster, attributes) {
+    const device = this.herdsman.getDeviceByIeeeAddr(ieeeAddr);
+    if (!device) throw new Error(`Device ${ieeeAddr} not found`);
+
+    const ep = device.getEndpoint(endpoint);
+    return ep.read(cluster, attributes);
+  }
+
+  /** Ping a device — returns latency in ms or throws on timeout */
+  async ping(ieeeAddr) {
+    const device = this.herdsman.getDeviceByIeeeAddr(ieeeAddr);
+    if (!device) throw new Error(`Device ${ieeeAddr} not found`);
+
+    const start = Date.now();
+    await device.ping();
+    return Date.now() - start;
+  }
+
+  // ── NVRam backup ──────────────────────────────────────────────────────────
+
+  async backup() {
+    const backupPath = path.join(this.config.data_dir, 'coordinator_backup.json');
+    await this.herdsman.backup();
+    this.log.info(`[zigbee] NVRam backup saved to ${backupPath}`);
+    return backupPath;
+  }
+
+  coordinatorInfo() {
+    return this.herdsman.getCoordinatorVersion();
+  }
+
+  networkParameters() {
+    return this.herdsman.getNetworkParameters();
+  }
+
+  // ── Private ───────────────────────────────────────────────────────────────
+
+  _attachEvents() {
+    const h = this.herdsman;
+
+    h.on('deviceJoined',            (d)    => this.emit('device_joined',              this._serializeDevice(d.device)));
+    h.on('deviceInterviewStarted',  (d)    => this.emit('device_interview_started',   this._serializeDevice(d.device)));
+    h.on('deviceInterview',         (d)    => {
+      if (d.status === 'successful') this.emit('device_interview_succeeded', this._serializeDevice(d.device));
+      else                           this.emit('device_interview_failed',    this._serializeDevice(d.device));
+    });
+    h.on('deviceAnnounce',          (d)    => this.emit('device_announce',            this._serializeDevice(d.device)));
+    h.on('deviceLeave',             (d)    => this.emit('device_leave',               { ieee_address: d.ieeeAddr }));
+    h.on('message',                 (msg)  => this.emit('device_message',             this._normalizeMessage(msg)));
+    h.on('permitJoinChanged',       (d)    => this.emit('permit_join_changed',        d));
+    h.on('lastSeenChanged',         (d)    => this.emit('last_seen_changed',          { ieee_address: d.device.ieeeAddr, last_seen: d.device.lastSeen }));
+  }
+
+  _serializeDevice(device) {
+    return {
+      ieee_address:     device.ieeeAddr,
+      network_address:  device.networkAddress,
+      type:             device.type,
+      manufacturer:     device.manufacturerName,
+      model_id:         device.modelID,
+      power_source:     device.powerSource,
+      interviewing:     device.interviewing,
+      interview_completed: device.interviewCompleted,
+      last_seen:        device.lastSeen,
+      endpoints:        device.endpoints.map(ep => ({
+        id:            ep.ID,
+        input_clusters:  ep.inputClusters,
+        output_clusters: ep.outputClusters,
+        device_type:   ep.deviceType,
+      })),
+    };
+  }
+
+  _normalizeMessage(msg) {
+    return {
+      ieee_address:    msg.device.ieeeAddr,
+      network_address: msg.device.networkAddress,
+      endpoint:        msg.endpoint.ID,
+      type:            msg.type,
+      cluster:         msg.cluster,
+      data:            msg.data,
+      link_quality:    msg.linkquality,
+    };
+  }
+}
+
+module.exports = { ZigbeeController };

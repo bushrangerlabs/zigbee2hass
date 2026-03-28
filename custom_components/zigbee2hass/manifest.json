@@ -1,0 +1,15 @@
+{
+  "domain": "zigbee2hass",
+  "name": "Zigbee2HASS",
+  "codeowners": ["@bushrangerlabs"],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/bushrangerlabs/zigbee2hass",
+  "homekit": false,
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/bushrangerlabs/zigbee2hass/issues",
+  "requirements": [],
+  "ssdp": [],
+  "version": "0.1.0",
+  "zeroconf": []
+}
