@@ -12,7 +12,7 @@ from homeassistant.components.climate import (
     HVACAction,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature
+from homeassistant.const import ATTR_TEMPERATURE
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -81,7 +81,7 @@ async def async_setup_entry(
 class Zigbee2HASSClimate(Zigbee2HASSEntity, ClimateEntity):
     """Representation of a Zigbee thermostat / climate device."""
 
-    _attr_temperature_unit = UnitOfTemperature.CELSIUS
+    _attr_temperature_unit = "°C"
 
     def __init__(self, coordinator: Zigbee2HASSCoordinator, ieee_address: str, expose: dict) -> None:
         super().__init__(coordinator, ieee_address, expose)

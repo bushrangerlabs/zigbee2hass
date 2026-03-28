@@ -7,16 +7,6 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import (
-    PERCENTAGE,
-    UnitOfElectricCurrent,
-    UnitOfElectricPotential,
-    UnitOfEnergy,
-    UnitOfIlluminance,
-    UnitOfPower,
-    UnitOfPressure,
-    UnitOfTemperature,
-)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -25,19 +15,20 @@ from .coordinator import Zigbee2HASSCoordinator
 from .entity import Zigbee2HASSEntity
 from .entity_factory import exposes_to_platforms
 
-# Map herdsman unit strings → HA units + device class
+# Use string literals for all units — avoids import churn as HA reorganises
+# its unit enums across versions. The string values are stable.
 UNIT_MAP: dict[str, tuple[str | None, str | None, str | None]] = {
-    # (HA unit, device_class, state_class)
-    "°C":   (UnitOfTemperature.CELSIUS,         SensorDeviceClass.TEMPERATURE,  SensorStateClass.MEASUREMENT),
-    "°F":   (UnitOfTemperature.FAHRENHEIT,       SensorDeviceClass.TEMPERATURE,  SensorStateClass.MEASUREMENT),
-    "%":    (PERCENTAGE,                         None,                            SensorStateClass.MEASUREMENT),
-    "hPa":  (UnitOfPressure.HPA,                SensorDeviceClass.PRESSURE,     SensorStateClass.MEASUREMENT),
-    "lux":  (UnitOfIlluminance.LUX,             SensorDeviceClass.ILLUMINANCE,  SensorStateClass.MEASUREMENT),
-    "W":    (UnitOfPower.WATT,                  SensorDeviceClass.POWER,        SensorStateClass.MEASUREMENT),
-    "kWh":  (UnitOfEnergy.KILO_WATT_HOUR,       SensorDeviceClass.ENERGY,       SensorStateClass.TOTAL_INCREASING),
-    "V":    (UnitOfElectricPotential.VOLT,       SensorDeviceClass.VOLTAGE,      SensorStateClass.MEASUREMENT),
-    "A":    (UnitOfElectricCurrent.AMPERE,       SensorDeviceClass.CURRENT,      SensorStateClass.MEASUREMENT),
-    "ppm":  ("ppm",                              SensorDeviceClass.CO2,          SensorStateClass.MEASUREMENT),
+    # (HA native_unit, device_class, state_class)
+    "°C":   ("°C",   SensorDeviceClass.TEMPERATURE,  SensorStateClass.MEASUREMENT),
+    "°F":   ("°F",   SensorDeviceClass.TEMPERATURE,  SensorStateClass.MEASUREMENT),
+    "%":    ("%",    None,                            SensorStateClass.MEASUREMENT),
+    "hPa":  ("hPa",  SensorDeviceClass.PRESSURE,     SensorStateClass.MEASUREMENT),
+    "lux":  ("lx",   SensorDeviceClass.ILLUMINANCE,  SensorStateClass.MEASUREMENT),
+    "W":    ("W",    SensorDeviceClass.POWER,         SensorStateClass.MEASUREMENT),
+    "kWh":  ("kWh",  SensorDeviceClass.ENERGY,        SensorStateClass.TOTAL_INCREASING),
+    "V":    ("V",    SensorDeviceClass.VOLTAGE,        SensorStateClass.MEASUREMENT),
+    "A":    ("A",    SensorDeviceClass.CURRENT,        SensorStateClass.MEASUREMENT),
+    "ppm":  ("ppm",  SensorDeviceClass.CO2,            SensorStateClass.MEASUREMENT),
 }
 
 # Battery sensor special case
@@ -94,7 +85,7 @@ class Zigbee2HASSensor(Zigbee2HASSEntity, SensorEntity):
             self._attr_device_class                = device_class
             self._attr_state_class                 = state_class
         elif name in BATTERY_NAMES or "battery" in name:
-            self._attr_native_unit_of_measurement = PERCENTAGE
+            self._attr_native_unit_of_measurement = "%"
             self._attr_device_class               = SensorDeviceClass.BATTERY
             self._attr_state_class                = SensorStateClass.MEASUREMENT
 
