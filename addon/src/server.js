@@ -56,6 +56,15 @@ async function main() {
   on('device_interview_succeeded', (device) => {
     devices.onDeviceInterview(device);
   });
+  on('device_interview_started', (device) => {
+    log.info(`[zigbee] Interview started: ${device.ieee_address} (${device.model_id || 'unknown'})`);
+  });
+  on('device_interview_failed', (device) => {
+    log.warn(`[zigbee] Interview FAILED: ${device.ieee_address} (${device.model_id || 'unknown'}) — device may be too far away or incompatible`);
+  });
+  on('device_joined', (device) => {
+    log.info(`[zigbee] Device joined network: ${device.ieee_address}`);
+  });
   on('device_announce', (rawDevice) => {
     devices.onDeviceAnnounce(rawDevice);
   });
@@ -97,6 +106,14 @@ async function main() {
     // Initial backup after coordinator starts
     if (config.nvram_backup) {
       setTimeout(() => zigbee.backup().catch(e => log.warn(`Initial backup failed: ${e.message}`)), 5000);
+    }
+
+    // Log network info for diagnostics
+    try {
+      const netParams = await zigbee.networkParameters();
+      log.info(`[zigbee] Network: channel=${netParams.channel}, panID=0x${netParams.panID.toString(16).toUpperCase()}, extPanID=${JSON.stringify(netParams.extendedPanID)}`);
+    } catch (e) {
+      log.warn(`[zigbee] Could not read network parameters: ${e.message}`);
     }
 
     log.info('=== Zigbee2HASS ready ===');

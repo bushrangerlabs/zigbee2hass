@@ -56,12 +56,14 @@ class DeviceManager {
       if (!this._availability.has(ieee)) this._availability.set(ieee, { available: true, last_seen: Date.now() });
     }
 
+    const loadedCount = this._definitions.size;
+    this.log.info(`[devices] DeviceManager started — ${loadedCount} device(s) loaded from database`);
+
     // Start availability polling for mains-powered devices
     this._availabilityTimer = setInterval(
       () => this._checkAvailability(),
       this.config.availability_ping_interval * 1000
     );
-    this.log.info('[devices] DeviceManager started');
   }
 
   stop() {
