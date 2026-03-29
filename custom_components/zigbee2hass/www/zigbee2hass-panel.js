@@ -426,11 +426,15 @@ class Zigbee2HASSPanel extends HTMLElement {
 
   async _fullLoad() {
     try {
-      const [zigbeeRes, devReg, entReg] = await Promise.all([
+      const [zigbeeRes, devRegRaw, entRegRaw] = await Promise.all([
         this._hass.callWS({ type: 'zigbee2hass/get_devices' }),
         this._hass.callWS({ type: 'config/device_registry/list' }),
         this._hass.callWS({ type: 'config/entity_registry/list' }),
       ]);
+
+      // HA may return a bare array or a wrapped object depending on version
+      const devReg = Array.isArray(devRegRaw) ? devRegRaw : (devRegRaw?.devices ?? []);
+      const entReg = Array.isArray(entRegRaw) ? entRegRaw : (entRegRaw?.entities ?? []);
 
       this._devices         = zigbeeRes.devices ?? [];
       this._bridgeAvailable = zigbeeRes.bridge_available ?? false;
@@ -450,6 +454,10 @@ class Zigbee2HASSPanel extends HTMLElement {
         if (!ent.device_id) continue;
         (this._haEntityMap[ent.device_id] ??= []).push(ent.entity_id);
       }
+
+      console.debug('[zigbee2hass] devReg', devReg.length, 'entReg', entReg.length,
+        'haDeviceMap', Object.keys(this._haDeviceMap),
+        'haEntityMap', this._haEntityMap);
 
       this._loading = false;
       this._error   = null;
@@ -546,7 +554,8 @@ class Zigbee2HASSPanel extends HTMLElement {
       label.textContent = 'error';
     } else if (this._bridgeAvailable) {
       dot.className = 'dot online';
-      label.textContent = `online — ${this._devices.length} device${this._devices.length !== 1 ? 's' : ''}`;
+      const endCount = this._devices.filter(d => d.type !== 'Coordinator').length;
+      label.textContent = `online — ${endCount} device${endCount !== 1 ? 's' : ''}`;
     } else {
       dot.className = 'dot offline';
       label.textContent = 'bridge offline';
@@ -670,22 +679,27 @@ class Zigbee2HASSPanel extends HTMLElement {
 
   _entitiesHtml(ieee) {
     const haDeviceId = this._haDeviceMap?.[ieee];
-    const entityIds  = haDeviceId ? (this._haEntityMap?.[haDeviceId] ?? []) : [];
-    if (!entityIds.length) return '';
+    if (!haDeviceId) {
+      // Device not yet in HA registry — show nothing (happens before first entity created)
+      return '';
+    }
+    const entityIds = this._haEntityMap?.[haDeviceId] ?? [];
+    if (!entityIds.length) {
+      return `<div class="entities-section"><div class="entity-row" style="opacity:0.5;font-style:italic;font-size:0.75rem;">No HA entities linked</div></div>`;
+    }
     const rows = entityIds.map(eid => {
       const s = this._hass?.states?.[eid];
-      if (!s) return '';
       const domain     = eid.split('.')[0];
-      const friendlyName = s.attributes?.friendly_name ?? eid;
-      const isOn       = s.state === 'on';
-      const isUnavail  = s.state === 'unavailable';
-      const stateLabel = isUnavail ? 'unavail' : s.state;
+      const friendlyName = s?.attributes?.friendly_name ?? eid;
+      const isOn       = s?.state === 'on';
+      const isUnavail  = !s || s.state === 'unavailable';
+      const stateLabel = !s ? 'disabled' : isUnavail ? 'unavail' : s.state;
       const icon       = this._entityIcon(domain, s);
       const nameHtml   = `<span class="entity-label" title="${this._escHtml(eid)}">${this._escHtml(friendlyName)}</span>`;
       const stateHtml  = `<span class="entity-state ${isOn ? 'on' : ''}">${this._escHtml(stateLabel)}</span>`;
 
       let controlHtml = '';
-      if ((domain === 'light' || domain === 'switch' || domain === 'automation') && !isUnavail) {
+      if (s && (domain === 'light' || domain === 'switch' || domain === 'automation') && !isUnavail) {
         controlHtml = `
           <label class="toggle" title="Toggle">
             <input type="checkbox" data-toggle-entity="${this._escHtml(eid)}" ${isOn ? 'checked' : ''}>
@@ -693,7 +707,7 @@ class Zigbee2HASSPanel extends HTMLElement {
           </label>`;
       }
       let brightnessHtml = '';
-      if (domain === 'light' && isOn && s.attributes?.brightness != null) {
+      if (s && domain === 'light' && isOn && s.attributes?.brightness != null) {
         const pct = Math.round((s.attributes.brightness / 255) * 100);
         brightnessHtml = `
           <div class="brightness-row">
