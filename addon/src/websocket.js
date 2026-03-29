@@ -24,9 +24,17 @@ const { getLogger }       = require('./logger');
  *  set_state             - send command to device
  *  permit_join           - enable/disable joining
  *  ping_device           - ping a specific device
+ *  configure_device      - run ZCL attribute reporting setup for a device
+ *  get_network_map       - LQI scan, returns nodes + links
  *  backup                - trigger NVRam backup now
  *  restart               - restart the Zigbee controller
  *  health                - request watchdog/coordinator health status
+ *  get_groups            - list all Zigbee groups
+ *  create_group          - create a new group
+ *  remove_group          - delete a group
+ *  add_group_member      - add device endpoint to a group
+ *  remove_group_member   - remove device endpoint from a group
+ *  ota_check             - ask a device to check for firmware update
  */
 class WebSocketAPI {
   /**
@@ -208,6 +216,56 @@ class WebSocketAPI {
           const { ieee_address } = payload;
           const latency = await this.zigbee.pingDevice(ieee_address);
           reply({ latency_ms: latency });
+          break;
+        }
+
+        case 'configure_device': {
+          const { ieee_address } = payload;
+          const result = await this.devices.configureDevice(ieee_address);
+          reply(result);
+          break;
+        }
+
+        case 'get_network_map': {
+          const map = await this.zigbee.getNetworkMap();
+          reply(map);
+          break;
+        }
+
+        case 'get_groups': {
+          reply({ groups: this.zigbee.getGroups() });
+          break;
+        }
+
+        case 'create_group': {
+          const group = this.zigbee.createGroup(Number(payload.group_id));
+          reply({ group });
+          break;
+        }
+
+        case 'remove_group': {
+          this.zigbee.removeGroup(Number(payload.group_id));
+          reply({ removed: true });
+          break;
+        }
+
+        case 'add_group_member': {
+          const { group_id, ieee_address, endpoint_id = 1 } = payload;
+          const group = this.zigbee.addGroupMember(Number(group_id), ieee_address, Number(endpoint_id));
+          reply({ group });
+          break;
+        }
+
+        case 'remove_group_member': {
+          const { group_id, ieee_address, endpoint_id = 1 } = payload;
+          const group = this.zigbee.removeGroupMember(Number(group_id), ieee_address, Number(endpoint_id));
+          reply({ group });
+          break;
+        }
+
+        case 'ota_check': {
+          const result = await this.zigbee.triggerOtaCheck(payload.ieee_address);
+          reply(result);
           break;
         }
 

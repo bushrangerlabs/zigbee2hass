@@ -215,6 +215,122 @@ class ZigbeeController {
     return this.herdsman.getNetworkParameters();
   }
 
+  // ── Coordinator endpoint ──────────────────────────────────────────────────
+
+  getCoordinatorEndpoint() {
+    const coordinators = this.herdsman.getDevicesByType('Coordinator');
+    if (!coordinators || coordinators.length === 0) throw new Error('Coordinator device not found');
+    return coordinators[0].getEndpoint(1);
+  }
+
+  // ── Network map (LQI scan) ────────────────────────────────────────────────
+
+  async getNetworkMap() {
+    const devices = this.herdsman.getDevices();
+    const nodes   = [];
+    const linksMap = new Map(); // sorted "A-B" key => { source, target, lqi }
+
+    for (const device of devices) {
+      nodes.push({
+        ieee:  device.ieeeAddr,
+        type:  device.type,
+        model: device.modelID,
+        nwk:   device.networkAddress,
+      });
+
+      try {
+        const neighbors = await Promise.race([
+          device.lqi(),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('lqi timeout')), 5000)),
+        ]);
+        for (const nb of (neighbors || [])) {
+          const a = device.ieeeAddr;
+          const b = nb.ieeeAddr;
+          if (!a || !b || a === b) continue;
+          const key = [a, b].sort().join('|');
+          if (!linksMap.has(key) || linksMap.get(key).lqi < nb.lqi) {
+            linksMap.set(key, { source: a, target: b, lqi: nb.lqi });
+          }
+        }
+      } catch {
+        // Sleeping/offline devices don't respond — silently skip
+      }
+    }
+
+    return { nodes, links: Array.from(linksMap.values()) };
+  }
+
+  // ── Groups ────────────────────────────────────────────────────────────────
+
+  getGroups() {
+    return this.herdsman.getGroups().map(g => this._serializeGroup(g));
+  }
+
+  createGroup(groupId) {
+    const existing = this.herdsman.getGroupByID(groupId);
+    if (existing) throw new Error(`Group ${groupId} already exists`);
+    this.herdsman.createGroup(groupId);
+    return this._serializeGroup(this.herdsman.getGroupByID(groupId));
+  }
+
+  removeGroup(groupId) {
+    const group = this.herdsman.getGroupByID(groupId);
+    if (!group) throw new Error(`Group ${groupId} not found`);
+    group.removeFromDatabase();
+  }
+
+  addGroupMember(groupId, ieeeAddr, endpointId = 1) {
+    const group  = this.herdsman.getGroupByID(groupId);
+    if (!group) throw new Error(`Group ${groupId} not found`);
+    const device = this.herdsman.getDeviceByIeeeAddr(ieeeAddr);
+    if (!device) throw new Error(`Device ${ieeeAddr} not found`);
+    const ep = device.getEndpoint(endpointId);
+    if (!ep) throw new Error(`Endpoint ${endpointId} not found on ${ieeeAddr}`);
+    group.addMember(ep);
+    return this._serializeGroup(group);
+  }
+
+  removeGroupMember(groupId, ieeeAddr, endpointId = 1) {
+    const group  = this.herdsman.getGroupByID(groupId);
+    if (!group) throw new Error(`Group ${groupId} not found`);
+    const device = this.herdsman.getDeviceByIeeeAddr(ieeeAddr);
+    if (!device) throw new Error(`Device ${ieeeAddr} not found`);
+    const ep = device.getEndpoint(endpointId);
+    if (!ep) throw new Error(`Endpoint ${endpointId} not found on ${ieeeAddr}`);
+    group.removeMember(ep);
+    return this._serializeGroup(group);
+  }
+
+  _serializeGroup(group) {
+    return {
+      id:      group.groupID,
+      members: group.members.map(ep => ({
+        ieee_address: ep.getDevice()?.ieeeAddr ?? null,
+        endpoint_id:  ep.ID,
+      })).filter(m => m.ieee_address),
+    };
+  }
+
+  // ── OTA ───────────────────────────────────────────────────────────────────
+
+  /**
+   * Send imageNotify to a device to trigger it to start an OTA update check.
+   * The device will respond with queryNextImageRequest which herdsman handles.
+   * Returns true if the command was sent successfully.
+   */
+  async triggerOtaCheck(ieeeAddr) {
+    const device = this.herdsman.getDeviceByIeeeAddr(ieeeAddr);
+    if (!device) throw new Error(`Device ${ieeeAddr} not found`);
+    const ep = device.endpoints[0];
+    if (!ep) throw new Error(`No endpoints on ${ieeeAddr}`);
+    // imageNotify with payloadType=0 (query jitter) asks device to check for OTA
+    await ep.commandResponse('genOta', 'imageNotify', {
+      payloadType: 0,
+      queryJitter: 100,
+    }, {});
+    return { triggered: true, ieee_address: ieeeAddr };
+  }
+
   // ── Private ───────────────────────────────────────────────────────────────
 
   _attachEvents() {

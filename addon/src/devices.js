@@ -114,6 +114,18 @@ class DeviceManager {
     const definition = this._definitions.get(ieee);
     this.log.info(`[devices] Device announced: ${ieee} (${rawDevice.modelID})`);
 
+    // Auto-configure attribute reporting on announce so the device
+    // immediately reports its current state (state-read-on-reconnect).
+    if (definition && typeof definition.configure === 'function') {
+      try {
+        const coordEp = this.zigbee.getCoordinatorEndpoint();
+        await definition.configure(rawDevice, coordEp, definition);
+        this.log.info(`[devices] Auto-configured reporting for ${ieee} on announce`);
+      } catch (err) {
+        this.log.debug(`[devices] Auto-configure skipped for ${ieee}: ${err.message}`);
+      }
+    }
+
     this.emit('device_ready', {
       device: this.zigbee.serializeDevice(rawDevice),
       definition: definition ? this._serializeDefinition(definition, rawDevice) : null,
@@ -216,6 +228,26 @@ class DeviceManager {
     this._rawDevices.delete(ieee_address);
     this._state.delete(ieee_address);
     this._availability.delete(ieee_address);
+  }
+
+  // ── Configure / reconfigure ───────────────────────────────────────────────
+
+  /**
+   * Run the ZHC configure() function for a device to set up attribute reporting.
+   * This is the same function zigbee2mqtt calls after interview.
+   */
+  async configureDevice(ieee_address) {
+    const rawDevice  = this._rawDevices.get(ieee_address);
+    const definition = this._definitions.get(ieee_address);
+    if (!rawDevice)  throw new Error(`Device ${ieee_address} not found in cache`);
+    if (!definition) throw new Error(`No definition for ${ieee_address}`);
+    if (typeof definition.configure !== 'function') {
+      return { configured: false, reason: 'no configure function for this device' };
+    }
+    const coordEp = this.zigbee.getCoordinatorEndpoint();
+    await definition.configure(rawDevice, coordEp, definition);
+    this.log.info(`[devices] Reconfigured attribute reporting for ${ieee_address}`);
+    return { configured: true };
   }
 
   // ── State access ──────────────────────────────────────────────────────────

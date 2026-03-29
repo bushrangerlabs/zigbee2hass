@@ -26,6 +26,9 @@ class Zigbee2HASSPanel extends HTMLElement {
       this._permitCountdown = 0;
       this._loading = true;
       this._error   = null;
+      this._activeTab        = 'devices';
+      this._selectedGroupId  = null;
+      this._groups           = [];
       this._setup();
       this._fullLoad();
       this._startPolling();
@@ -418,6 +421,86 @@ class Zigbee2HASSPanel extends HTMLElement {
           transition: opacity 0.3s;
         }
         .toast.visible { opacity: 1; }
+
+        /* ── Tabs ── */
+        .tabs {
+          display: flex;
+          gap: 4px;
+          margin-bottom: 16px;
+          border-bottom: 2px solid var(--divider-color, #e0e0e0);
+          padding-bottom: 0;
+        }
+        .tab-btn {
+          background: transparent;
+          border: none;
+          border-bottom: 3px solid transparent;
+          border-radius: 0;
+          padding: 8px 14px;
+          font-size: 0.85rem;
+          font-weight: 500;
+          color: var(--secondary-text-color, #757575);
+          cursor: pointer;
+          margin-bottom: -2px;
+          transition: color 0.15s, border-color 0.15s;
+        }
+        .tab-btn:hover { color: var(--primary-text-color, #212121); }
+        .tab-btn.active {
+          color: var(--primary-color, #03a9f4);
+          border-bottom-color: var(--primary-color, #03a9f4);
+        }
+
+        /* ── Network map ── */
+        .map-wrap {
+          background: var(--card-background-color, #fff);
+          border-radius: 8px;
+          box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+          padding: 16px;
+          overflow: hidden;
+        }
+        .map-wrap svg { display: block; width: 100%; touch-action: none; }
+        .map-node circle { cursor: pointer; }
+        .map-node text { font-size: 11px; fill: var(--primary-text-color,#212121); pointer-events: none; }
+        .map-link { stroke: #bbb; stroke-opacity: 0.8; }
+        .map-link.strong { stroke: #4caf50; }
+        .map-link.medium { stroke: #ff9800; }
+        .map-link.weak   { stroke: #f44336; }
+        .map-legend { display:flex; gap:16px; flex-wrap:wrap; margin-top:10px; font-size:0.78rem; color:var(--secondary-text-color,#757575); }
+        .map-legend span::before { content:'—'; font-weight:700; margin-right:4px; }
+        .map-legend .l-strong::before { color:#4caf50; } .map-legend .l-medium::before { color:#ff9800; } .map-legend .l-weak::before { color:#f44336; }
+
+        /* ── Groups ── */
+        .groups-layout { display: grid; grid-template-columns: 260px 1fr; gap: 16px; align-items: start; }
+        @media (max-width: 600px) { .groups-layout { grid-template-columns: 1fr; } }
+        .group-list-card, .group-detail-card {
+          background: var(--card-background-color, #fff);
+          border-radius: 8px;
+          box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+          padding: 16px;
+        }
+        .group-list-card h3, .group-detail-card h3 { margin: 0 0 12px; font-size:0.95rem; font-weight:600; }
+        .group-item {
+          display: flex; align-items: center; gap: 8px;
+          padding: 7px 8px; border-radius: 6px; cursor: pointer;
+          font-size: 0.88rem;
+        }
+        .group-item:hover { background: var(--secondary-background-color, #f5f5f5); }
+        .group-item.selected { background: var(--primary-color-light, #e1f5fe); }
+        .group-member-row { display:flex; align-items:center; gap:8px; padding:5px 0; font-size:0.85rem; border-bottom:1px solid var(--divider-color,#eee); }
+        .group-member-row:last-child { border:none; }
+        .new-group-row { display:flex; gap:8px; margin-bottom:10px; }
+        .new-group-row input { flex:1; border:1px solid var(--divider-color,#ccc); border-radius:4px; padding:6px 10px; font-size:0.85rem; background:var(--primary-background-color,#fafafa); color:var(--primary-text-color,#212121); }
+
+        /* ── Tools ── */
+        .tools-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; }
+        .tool-card {
+          background: var(--card-background-color, #fff);
+          border-radius: 8px;
+          box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+          padding: 16px;
+        }
+        .tool-card h3 { margin:0 0 8px; font-size:0.9rem; font-weight:600; }
+        .tool-card p  { margin:0 0 12px; font-size:0.82rem; color:var(--secondary-text-color,#757575); }
+        .tool-result { margin-top:8px; font-size:0.8rem; color:var(--secondary-text-color,#888); word-break:break-all; }
       </style>
 
       <div class="header">
@@ -430,6 +513,13 @@ class Zigbee2HASSPanel extends HTMLElement {
         <button class="btn-ghost"   id="btn-refresh" title="Refresh">↺</button>
       </div>
 
+      <div class="tabs">
+        <button class="tab-btn active" data-tab="devices">📱 Devices</button>
+        <button class="tab-btn" data-tab="map">🗺 Network Map</button>
+        <button class="tab-btn" data-tab="groups">👥 Groups</button>
+        <button class="tab-btn" data-tab="tools">🔧 Tools</button>
+      </div>
+
       <div id="pj-banner-container"></div>
       <div id="content"><div class="loading"><div class="spinner"></div>Loading devices…</div></div>
       <div class="toast" id="toast"></div>
@@ -437,6 +527,14 @@ class Zigbee2HASSPanel extends HTMLElement {
 
     this.shadowRoot.getElementById('btn-add').addEventListener('click', () => this._openPermitJoin());
     this.shadowRoot.getElementById('btn-refresh').addEventListener('click', () => this._fullLoad());
+
+    this.shadowRoot.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        this._activeTab = btn.dataset.tab;
+        this.shadowRoot.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b === btn));
+        this._renderTabContent();
+      });
+    });
   }
 
   // ── Data loading ──────────────────────────────────────────────────────────
@@ -558,7 +656,15 @@ class Zigbee2HASSPanel extends HTMLElement {
   _renderAll() {
     this._updateBridgeStatus();
     this._renderPermitBanner();
-    this._renderDevices();
+    this._renderTabContent();
+  }
+
+  _renderTabContent() {
+    const tab = this._activeTab ?? 'devices';
+    if (tab === 'devices') this._renderDevices();
+    else if (tab === 'map')    this._renderNetworkMap();
+    else if (tab === 'groups') this._renderGroups();
+    else if (tab === 'tools')  this._renderTools();
   }
 
   _updateBridgeStatus() {
@@ -616,6 +722,8 @@ class Zigbee2HASSPanel extends HTMLElement {
         e.stopPropagation();
         const { action, ieee } = el.dataset;
         if (action === 'ping')         this._pingDevice(ieee, el);
+        if (action === 'configure')    this._configureDevice(ieee, el);
+        if (action === 'ota')          this._otaCheck(ieee, el);
         if (action === 'remove')       this._removeDevice(ieee);
         if (action === 'rename-start') this._startRename(ieee);
       });
@@ -695,6 +803,8 @@ class Zigbee2HASSPanel extends HTMLElement {
         ${entityHtml}
         <div class="actions">
           <button class="btn-ghost btn-sm" data-action="ping" data-ieee="${ieee}" title="Ping device">Ping</button>
+          <button class="btn-ghost btn-sm" data-action="configure" data-ieee="${ieee}" title="Reconfigure attribute reporting">⚙ Configure</button>
+          ${d.definition?.supports_ota ? `<button class="btn-ghost btn-sm" data-action="ota" data-ieee="${ieee}" title="Check for OTA firmware update">⬆ OTA</button>` : ''}
           <button class="btn-danger btn-sm" data-action="remove" data-ieee="${ieee}" title="Remove device">Remove</button>
         </div>
       </div>`;
@@ -896,6 +1006,241 @@ class Zigbee2HASSPanel extends HTMLElement {
       // Restore original name label - just re-render
       await this._fullLoad();
     }
+  }
+
+  // ── Configure / OTA / Network map / Groups / Tools ─────────────────────────
+
+  async _configureDevice(ieee, btn) {
+    const orig = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '…';
+    try {
+      const res = await this._hass.callWS({ type: 'zigbee2hass/configure_device', ieee_address: ieee });
+      const msg = res.configured ? '✓ Configured' : `⚠ ${res.reason ?? 'skipped'}`;
+      this._showToast(`Configure ${ieee}: ${msg}`);
+      btn.textContent = 'Done';
+      setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 2500);
+    } catch (err) {
+      this._showToast('Configure failed: ' + (err.message ?? err));
+      btn.textContent = 'failed';
+      setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 2000);
+    }
+  }
+
+  async _otaCheck(ieee, btn) {
+    const orig = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '…';
+    try {
+      await this._hass.callWS({ type: 'zigbee2hass/ota_check', ieee_address: ieee });
+      this._showToast(`OTA check triggered for ${ieee} — device will respond shortly`);
+      btn.textContent = 'Sent';
+      setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 3000);
+    } catch (err) {
+      this._showToast('OTA check failed: ' + (err.message ?? err));
+      btn.textContent = 'failed';
+      setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 2000);
+    }
+  }
+
+  // ── Network Map ─────────────────────────────────────────────────────────────
+
+  async _renderNetworkMap() {
+    const content = this.shadowRoot.getElementById('content');
+    content.innerHTML = `<div class="map-wrap"><div class="loading"><div class="spinner"></div>Scanning network…</div></div>`;
+    try {
+      const map = await this._hass.callWS({ type: 'zigbee2hass/get_network_map' });
+      this._drawNetworkMap(content, map);
+    } catch (err) {
+      content.innerHTML = `<div class="error-msg">⚠ Network map failed: ${this._escHtml(err.message ?? String(err))}</div>`;
+    }
+  }
+
+  _drawNetworkMap(content, map) {
+    const { nodes = [], links = [] } = map;
+    const W = 700, H = 500, R = 14;
+    // Assign positions: coordinator at center, others in circle
+    const devNodes = nodes.filter(n => n.type !== 'Coordinator');
+    const coordNode = nodes.find(n => n.type === 'Coordinator');
+    const positions = new Map();
+    if (coordNode) positions.set(coordNode.ieee, { x: W/2, y: H/2, node: coordNode });
+    devNodes.forEach((n, i) => {
+      const angle = (2 * Math.PI * i) / devNodes.length - Math.PI / 2;
+      const r = Math.min(W, H) * 0.38;
+      positions.set(n.ieee, { x: W/2 + r * Math.cos(angle), y: H/2 + r * Math.sin(angle), node: n });
+    });
+    const linkSvg = links.map(l => {
+      const a = positions.get(l.source), b = positions.get(l.target);
+      if (!a || !b) return '';
+      const cls = l.lqi >= 170 ? 'strong' : l.lqi >= 85 ? 'medium' : 'weak';
+      return `<line class="map-link ${cls}" x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke-width="${l.lqi >= 170 ? 2 : 1}"><title>LQI ${l.lqi}</title></line>`;
+    }).join('');
+    const nodeSvg = Array.from(positions.values()).map(({ x, y, node }) => {
+      const isCoord = node.type === 'Coordinator';
+      const label   = this._escHtml((node.model ?? node.ieee ?? '').slice(0, 14));
+      const fill    = isCoord ? '#03a9f4' : (node.type === 'Router' ? '#4caf50' : '#ff9800');
+      return `<g class="map-node"><circle cx="${x}" cy="${y}" r="${isCoord ? R+4 : R}" fill="${fill}" fill-opacity="0.85" stroke="#fff" stroke-width="2"/><text x="${x}" y="${y + R + 13}" text-anchor="middle">${label}</text></g>`;
+    }).join('');
+    content.innerHTML = `
+      <div class="map-wrap">
+        <svg viewBox="0 0 ${W} ${H}" style="height:${H}px">${linkSvg}${nodeSvg}</svg>
+        <div class="map-legend">
+          <span>🔵 Coordinator &nbsp; 🟢 Router &nbsp; 🟠 End device</span>
+          <span class="l-strong">Strong (&ge;170)</span>
+          <span class="l-medium">Medium (&ge;85)</span>
+          <span class="l-weak">Weak (&lt;85)</span>
+        </div>
+        <div style="margin-top:12px"><button class="btn-ghost btn-sm" id="btn-map-refresh">↺ Rescan</button></div>
+      </div>`;
+    content.querySelector('#btn-map-refresh')?.addEventListener('click', () => this._renderNetworkMap());
+  }
+
+  // ── Groups ────────────────────────────────────────────────────────────────
+
+  async _renderGroups() {
+    const content = this.shadowRoot.getElementById('content');
+    content.innerHTML = `<div class="loading"><div class="spinner"></div>Loading groups…</div>`;
+    try {
+      const res = await this._hass.callWS({ type: 'zigbee2hass/get_groups' });
+      this._groups = res.groups ?? [];
+      this._drawGroups(content);
+    } catch (err) {
+      content.innerHTML = `<div class="error-msg">⚠ ${this._escHtml(err.message ?? String(err))}</div>`;
+    }
+  }
+
+  _drawGroups(content) {
+    const groups = this._groups;
+    const selId  = this._selectedGroupId;
+    const selGroup = groups.find(g => g.id === selId);
+    const devicesByIeee = Object.fromEntries(this._devices.map(d => [d.ieee_address, d]));
+
+    const listHtml = groups.length === 0
+      ? '<p style="font-size:0.82rem;color:var(--secondary-text-color,#aaa)">No groups yet.</p>'
+      : groups.map(g => `
+        <div class="group-item ${g.id === selId ? 'selected' : ''}" data-gid="${g.id}">
+          👥 Group ${g.id} <span style="font-size:0.75rem;color:var(--secondary-text-color,#aaa);margin-left:auto">${g.members.length} member${g.members.length !== 1 ? 's' : ''}</span>
+        </div>`).join('');
+
+    const detailHtml = selGroup ? `
+        <h3>Group ${selGroup.id}</h3>
+        <div style="margin-bottom:10px">
+          ${selGroup.members.length === 0 ? '<p style="font-size:0.82rem;color:var(--secondary-text-color,#aaa)">No members yet.</p>' : selGroup.members.map(m => {
+            const dev = devicesByIeee[m.ieee_address];
+            const name = dev?.friendly_name ?? m.ieee_address;
+            return `<div class="group-member-row">
+              <span style="flex:1">${this._escHtml(name)} <span style="font-size:0.75rem;color:#aaa">ep ${m.endpoint_id}</span></span>
+              <button class="btn-danger btn-sm" data-action="grp-remove-member" data-gid="${selGroup.id}" data-ieee="${m.ieee_address}" data-ep="${m.endpoint_id}">✕</button>
+            </div>`;
+          }).join('')}
+        </div>
+        <div style="margin-bottom:6px;font-size:0.82rem;font-weight:600">Add device:</div>
+        <select id="grp-add-select" style="font-size:0.82rem;padding:5px 8px;border-radius:4px;border:1px solid var(--divider-color,#ccc);background:var(--primary-background-color,#fff);color:var(--primary-text-color,#212121);width:100%;margin-bottom:8px">
+          <option value="">— select device —</option>
+          ${this._devices.filter(d => d.type !== 'Coordinator').map(d =>
+            `<option value="${d.ieee_address}">${this._escHtml(d.friendly_name ?? d.ieee_address)}</option>`).join('')}
+        </select>
+        <div style="display:flex;gap:8px">
+          <button class="btn-primary btn-sm" id="grp-add-btn" data-gid="${selGroup.id}">Add</button>
+          <button class="btn-danger btn-sm" id="grp-delete-btn" data-gid="${selGroup.id}">Delete Group</button>
+        </div>`
+      : '<p style="font-size:0.82rem;color:var(--secondary-text-color,#aaa)">Select a group to manage members.</p>';
+
+    content.innerHTML = `
+      <div class="groups-layout">
+        <div class="group-list-card">
+          <h3>Groups</h3>
+          <div class="new-group-row">
+            <input id="new-group-id" type="number" min="1" max="65535" placeholder="Group ID (1-65535)">
+            <button class="btn-primary btn-sm" id="btn-create-group">＋ Create</button>
+          </div>
+          <div id="group-list">${listHtml}</div>
+        </div>
+        <div class="group-detail-card" id="group-detail">${detailHtml}</div>
+      </div>`;
+
+    // Events
+    content.querySelectorAll('.group-item[data-gid]').forEach(el => {
+      el.addEventListener('click', () => {
+        this._selectedGroupId = Number(el.dataset.gid);
+        this._drawGroups(content);
+      });
+    });
+    content.querySelector('#btn-create-group')?.addEventListener('click', async () => {
+      const idInput = content.querySelector('#new-group-id');
+      const gid = parseInt(idInput?.value);
+      if (!gid || gid < 1 || gid > 65535) { this._showToast('Enter a valid group ID (1–65535)'); return; }
+      try {
+        await this._hass.callWS({ type: 'zigbee2hass/create_group', group_id: gid });
+        this._showToast(`Group ${gid} created`);
+        await this._renderGroups();
+      } catch (err) { this._showToast('Create failed: ' + (err.message ?? err)); }
+    });
+    content.querySelectorAll('[data-action="grp-remove-member"]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        try {
+          await this._hass.callWS({ type: 'zigbee2hass/remove_group_member', group_id: Number(btn.dataset.gid), ieee_address: btn.dataset.ieee, endpoint_id: Number(btn.dataset.ep) });
+          this._showToast('Member removed');
+          await this._renderGroups();
+        } catch (err) { this._showToast('Remove failed: ' + (err.message ?? err)); }
+      });
+    });
+    content.querySelector('#grp-add-btn')?.addEventListener('click', async (e) => {
+      const gid  = Number(e.target.dataset.gid);
+      const ieee = content.querySelector('#grp-add-select')?.value;
+      if (!ieee) { this._showToast('Select a device first'); return; }
+      try {
+        await this._hass.callWS({ type: 'zigbee2hass/add_group_member', group_id: gid, ieee_address: ieee });
+        this._showToast('Member added');
+        await this._renderGroups();
+      } catch (err) { this._showToast('Add failed: ' + (err.message ?? err)); }
+    });
+    content.querySelector('#grp-delete-btn')?.addEventListener('click', async (e) => {
+      const gid = Number(e.target.dataset.gid);
+      if (!confirm(`Delete group ${gid}?`)) return;
+      try {
+        await this._hass.callWS({ type: 'zigbee2hass/remove_group', group_id: gid });
+        this._selectedGroupId = null;
+        this._showToast(`Group ${gid} deleted`);
+        await this._renderGroups();
+      } catch (err) { this._showToast('Delete failed: ' + (err.message ?? err)); }
+    });
+  }
+
+  // ── Tools ─────────────────────────────────────────────────────────────────
+
+  _renderTools() {
+    const content = this.shadowRoot.getElementById('content');
+    content.innerHTML = `
+      <div class="tools-grid">
+        <div class="tool-card">
+          <h3>💾 NVRam Backup</h3>
+          <p>Save a backup of the coordinator's NVRam to <code>coordinator_backup.json</code>. This file can be used to restore the network after a coordinator replacement.</p>
+          <button class="btn-primary" id="btn-backup">Backup Now</button>
+          <div class="tool-result" id="backup-result"></div>
+        </div>
+        <div class="tool-card">
+          <h3>ℹ️ About</h3>
+          <p>Zigbee2HASS — Zigbee integration for Home Assistant.<br>Devices: ${this._devices.filter(d => d.type !== 'Coordinator').length}</p>
+        </div>
+      </div>`;
+
+    content.querySelector('#btn-backup')?.addEventListener('click', async (btn) => {
+      const b = content.querySelector('#btn-backup');
+      const r = content.querySelector('#backup-result');
+      b.disabled = true; b.textContent = '…';
+      try {
+        const res = await this._hass.callWS({ type: 'zigbee2hass/backup' });
+        const ts  = new Date().toLocaleTimeString();
+        r.textContent = `✓ Saved at ${ts} → ${res.path ?? '(unknown path)'}`;
+        this._showToast('NVRam backup complete');
+      } catch (err) {
+        r.textContent = '⚠ ' + (err.message ?? String(err));
+        this._showToast('Backup failed: ' + (err.message ?? err));
+      } finally {
+        b.disabled = false; b.textContent = 'Backup Now';
+      }
+    });
   }
 
   // ── Utilities ─────────────────────────────────────────────────────────────

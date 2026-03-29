@@ -143,6 +143,34 @@ class Zigbee2HASSCoordinator:
         if ieee_address in self.devices:
             self.devices[ieee_address]["device"]["friendly_name"] = result.get("friendly_name", name)
 
+    async def async_configure_device(self, ieee_address: str) -> dict:
+        return await self._client.request("configure_device", {"ieee_address": ieee_address})
+
+    async def async_get_network_map(self) -> dict:
+        return await self._client.request("get_network_map")
+
+    async def async_get_groups(self) -> dict:
+        return await self._client.request("get_groups")
+
+    async def async_create_group(self, group_id: int) -> dict:
+        return await self._client.request("create_group", {"group_id": group_id})
+
+    async def async_remove_group(self, group_id: int) -> None:
+        await self._client.request("remove_group", {"group_id": group_id})
+
+    async def async_add_group_member(self, group_id: int, ieee_address: str, endpoint_id: int = 1) -> dict:
+        return await self._client.request("add_group_member", {
+            "group_id": group_id, "ieee_address": ieee_address, "endpoint_id": endpoint_id
+        })
+
+    async def async_remove_group_member(self, group_id: int, ieee_address: str, endpoint_id: int = 1) -> dict:
+        return await self._client.request("remove_group_member", {
+            "group_id": group_id, "ieee_address": ieee_address, "endpoint_id": endpoint_id
+        })
+
+    async def async_ota_check(self, ieee_address: str) -> dict:
+        return await self._client.request("ota_check", {"ieee_address": ieee_address})
+
     # ── Internal callbacks ────────────────────────────────────────────────
 
     @callback
