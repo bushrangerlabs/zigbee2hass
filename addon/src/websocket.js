@@ -116,6 +116,15 @@ class WebSocketAPI {
 
       this._send(ws, 'zigbee2hass/bridge/state', { state: 'online' });
       this._send(ws, 'zigbee2hass/bridge/coordinator', { coordinator, network });
+
+      // Log exposes count per device for diagnostics
+      for (const d of devices) {
+        const def      = definitions[d.ieee_address];
+        const exposes  = def?.exposes ?? [];
+        const exposeCt = Array.isArray(exposes) ? exposes.length : 0;
+        this.log.info(`[ws] Snapshot: ${d.ieee_address} model=${d.model_id ?? '?'} exposes=${exposeCt}`);
+      }
+
       this._send(ws, 'zigbee2hass/bridge/devices', {
         devices: devices.map(d => ({
           ...d,

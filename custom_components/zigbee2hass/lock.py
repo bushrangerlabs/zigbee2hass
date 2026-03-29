@@ -43,8 +43,17 @@ async def async_setup_entry(
         if event.data.get("entry_id") == entry.entry_id:
             _add_for_device(event.data["ieee_address"])
 
+    def _on_devices_loaded(event) -> None:
+        """Handle full device snapshot — add entities for any not yet processed."""
+        if event.data.get("entry_id") == entry.entry_id:
+            for ieee_address in coordinator.devices:
+                _add_for_device(ieee_address)
+
     entry.async_on_unload(
         hass.bus.async_listen(f"{DOMAIN}_device_ready", _on_device_ready)
+    )
+    entry.async_on_unload(
+        hass.bus.async_listen(f"{DOMAIN}_devices_loaded", _on_devices_loaded)
     )
 
 

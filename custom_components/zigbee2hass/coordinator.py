@@ -222,7 +222,33 @@ class Zigbee2HASSCoordinator:
                 "state":      device_data.get("state", {}),
                 "available":  device_data.get("available", False),
             }
-        _LOGGER.info("Snapshot received: %d devices", len(self.devices))
+
+        _LOGGER.info("Snapshot received: %d devices total", len(self.devices))
+
+        # Log each non-coordinator device so it's easy to diagnose missing exposes
+        dev_reg = dr.async_get(self.hass)
+        for ieee, data in self.devices.items():
+            if ieee == "coordinator":
+                continue
+            device     = data.get("device", {})
+            definition = data.get("definition") or {}
+            exposes    = definition.get("exposes", [])
+            model_id   = device.get("model_id") or "?"
+            _LOGGER.info(
+                "Snapshot device: %s  model=%s  exposes=%d",
+                ieee, model_id, len(exposes),
+            )
+            # Eagerly register HA device even if no entities yet — ensures the
+            # panel can map ieee → HA device id regardless of exposes state.
+            dev_reg.async_get_or_create(
+                config_entry_id=self.entry.entry_id,
+                identifiers={(DOMAIN, ieee)},
+                name=device.get("friendly_name") or model_id,
+                manufacturer=device.get("manufacturer"),
+                model=model_id,
+                via_device=(DOMAIN, "coordinator"),
+                sw_version=device.get("software_build_id"),
+            )
 
         # Unblock async_start() if it's still waiting
         if self._snapshot_event and not self._snapshot_event.is_set():
@@ -279,7 +305,24 @@ class Zigbee2HASSCoordinator:
             "state":      {},
             "available":  True,
         }
-        _LOGGER.info("Device ready: %s (%s)", ieee, device.get("model_id"))
+        exposes  = (definition or {}).get("exposes", [])
+        model_id = device.get("model_id") or "?"
+        _LOGGER.info(
+            "Device ready: %s  model=%s  exposes=%d",
+            ieee, model_id, len(exposes),
+        )
+
+        # Eagerly register the HA device so haDeviceMap can find it
+        dev_reg = dr.async_get(self.hass)
+        dev_reg.async_get_or_create(
+            config_entry_id=self.entry.entry_id,
+            identifiers={(DOMAIN, ieee)},
+            name=device.get("friendly_name") or model_id,
+            manufacturer=device.get("manufacturer"),
+            model=model_id,
+            via_device=(DOMAIN, "coordinator"),
+            sw_version=device.get("software_build_id"),
+        )
 
         # Fire event so platforms can add new entities at runtime
         self.hass.bus.fire(f"{DOMAIN}_device_ready", {
