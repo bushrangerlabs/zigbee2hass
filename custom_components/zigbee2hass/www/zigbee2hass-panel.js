@@ -3,26 +3,35 @@
  *
  * Registers <zigbee2hass-panel> as a HA panel component.
  * Communicates with the integration via HA WebSocket API (hass.callWS).
+ * Shows HA entities per device card with live state + toggle/brightness controls.
  */
 
 'use strict';
 
+const DOMAIN = 'zigbee2hass';
+
 class Zigbee2HASSPanel extends HTMLElement {
-  // ── HA lifecycle ────────────────────────────────────────────────────────
+  // ── HA lifecycle ─────────────────────────────────────────────────────────
 
   set hass(hass) {
+    const prev = this._hass;
     this._hass = hass;
     if (!this._initialized) {
       this._initialized = true;
-      this._devices = [];
+      this._devices     = [];
+      this._haDeviceMap = {};  // ieee_address → HA device_id
+      this._haEntityMap = {};  // HA device_id  → [entity_id, ...]
       this._bridgeAvailable = false;
-      this._permitJoin = false;
+      this._permitJoin      = false;
       this._permitCountdown = 0;
       this._loading = true;
-      this._error = null;
+      this._error   = null;
       this._setup();
-      this._loadDevices();
+      this._fullLoad();
       this._startPolling();
+    } else if (hass && prev && hass.states !== prev.states) {
+      // HA pushed updated states — re-render entity rows without a full reload
+      this._renderDevices();
     }
   }
 
@@ -271,6 +280,89 @@ class Zigbee2HASSPanel extends HTMLElement {
           max-width: 150px;
         }
 
+        /* ── Entity section ── */
+        .entities-section {
+          border-top: 1px solid var(--divider-color, #e8e8e8);
+          padding-top: 8px;
+          display: flex;
+          flex-direction: column;
+          gap: 5px;
+        }
+        .entities-label {
+          font-size: 0.7rem;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+          color: var(--secondary-text-color, #9e9e9e);
+          font-weight: 600;
+          margin-bottom: 2px;
+        }
+        .entity-row {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding: 4px 6px;
+          border-radius: 6px;
+          background: var(--secondary-background-color, #f5f5f5);
+        }
+        .entity-icon  { font-size: 1rem; flex-shrink: 0; width: 22px; text-align: center; }
+        .entity-label {
+          flex: 1;
+          font-size: 0.82rem;
+          color: var(--primary-text-color, #212121);
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .entity-state {
+          font-size: 0.78rem;
+          font-weight: 500;
+          color: var(--secondary-text-color, #9e9e9e);
+          white-space: nowrap;
+          flex-shrink: 0;
+        }
+        .entity-state.on { color: #ff9800; font-weight: 600; }
+        /* Toggle switch */
+        .toggle { position: relative; width: 36px; height: 20px; flex-shrink: 0; }
+        .toggle input { opacity: 0; width: 0; height: 0; margin: 0; }
+        .slider {
+          position: absolute; inset: 0;
+          background: #ccc;
+          border-radius: 20px;
+          cursor: pointer;
+          transition: background 0.25s;
+        }
+        .slider:before {
+          content: '';
+          position: absolute;
+          width: 14px; height: 14px;
+          left: 3px; bottom: 3px;
+          background: #fff;
+          border-radius: 50%;
+          transition: transform 0.25s;
+        }
+        .toggle input:checked + .slider { background: var(--primary-color, #03a9f4); }
+        .toggle input:checked + .slider:before { transform: translateX(16px); }
+        /* Brightness */
+        .brightness-row {
+          display: flex; align-items: center; gap: 8px;
+          padding: 0 6px 4px;
+        }
+        .brightness-label { font-size: 0.7rem; color: var(--secondary-text-color, #9e9e9e); width: 64px; }
+        .brightness-slider {
+          flex: 1;
+          -webkit-appearance: none;
+          height: 4px; border-radius: 2px;
+          background: var(--divider-color, #e0e0e0);
+          outline: none; cursor: pointer;
+        }
+        .brightness-slider::-webkit-slider-thumb {
+          -webkit-appearance: none;
+          width: 14px; height: 14px;
+          border-radius: 50%;
+          background: var(--primary-color, #03a9f4);
+          cursor: pointer;
+        }
+
         /* ── Empty / loading states ── */
         .empty, .loading, .error-msg {
           text-align: center;
@@ -327,35 +419,53 @@ class Zigbee2HASSPanel extends HTMLElement {
     `;
 
     this.shadowRoot.getElementById('btn-add').addEventListener('click', () => this._openPermitJoin());
-    this.shadowRoot.getElementById('btn-refresh').addEventListener('click', () => this._loadDevices());
+    this.shadowRoot.getElementById('btn-refresh').addEventListener('click', () => this._fullLoad());
   }
 
   // ── Data loading ──────────────────────────────────────────────────────────
 
-  async _loadDevices() {
+  async _fullLoad() {
     try {
-      const res = await this._hass.callWS({ type: 'zigbee2hass/get_devices' });
-      this._devices = res.devices ?? [];
-      this._bridgeAvailable = res.bridge_available ?? false;
-      this._permitJoin = res.permit_join ?? false;
+      const [zigbeeRes, devReg, entReg] = await Promise.all([
+        this._hass.callWS({ type: 'zigbee2hass/get_devices' }),
+        this._hass.callWS({ type: 'config/device_registry/list' }),
+        this._hass.callWS({ type: 'config/entity_registry/list' }),
+      ]);
+
+      this._devices         = zigbeeRes.devices ?? [];
+      this._bridgeAvailable = zigbeeRes.bridge_available ?? false;
+      this._permitJoin      = zigbeeRes.permit_join ?? false;
+
+      // ieee_address → HA device_id
+      this._haDeviceMap = {};
+      for (const haDev of devReg) {
+        for (const [idDomain, idValue] of (haDev.identifiers ?? [])) {
+          if (idDomain === DOMAIN) this._haDeviceMap[idValue] = haDev.id;
+        }
+      }
+
+      // HA device_id → [entity_id, ...]
+      this._haEntityMap = {};
+      for (const ent of entReg) {
+        if (!ent.device_id) continue;
+        (this._haEntityMap[ent.device_id] ??= []).push(ent.entity_id);
+      }
+
       this._loading = false;
-      this._error = null;
+      this._error   = null;
     } catch (err) {
       this._loading = false;
-      this._error = err.message ?? 'Failed to load devices';
+      this._error   = err.message ?? String(err);
     }
     this._renderAll();
   }
 
   _startPolling() {
-    this._pollTimer = setInterval(() => this._loadDevices(), 10000);
+    this._pollTimer = setInterval(() => this._fullLoad(), 15000);
   }
 
   _stopPolling() {
-    if (this._pollTimer) {
-      clearInterval(this._pollTimer);
-      this._pollTimer = null;
-    }
+    if (this._pollTimer) { clearInterval(this._pollTimer); this._pollTimer = null; }
   }
 
   // ── Permit Join ───────────────────────────────────────────────────────────
@@ -468,15 +578,29 @@ class Zigbee2HASSPanel extends HTMLElement {
 
     content.innerHTML = `<div class="grid">${endDevices.map(d => this._cardHtml(d)).join('')}</div>`;
 
-    // Attach card event handlers
     content.querySelectorAll('[data-action]').forEach(el => {
-      el.addEventListener('click', (e) => {
+      el.addEventListener('click', e => {
         e.stopPropagation();
-        const action = el.dataset.action;
-        const ieee   = el.dataset.ieee;
-        if (action === 'ping')   this._pingDevice(ieee, el);
-        if (action === 'remove') this._removeDevice(ieee);
+        const { action, ieee } = el.dataset;
+        if (action === 'ping')         this._pingDevice(ieee, el);
+        if (action === 'remove')       this._removeDevice(ieee);
         if (action === 'rename-start') this._startRename(ieee);
+      });
+    });
+
+    // Toggle switches
+    content.querySelectorAll('input[data-toggle-entity]').forEach(input => {
+      input.addEventListener('change', e => {
+        e.stopPropagation();
+        this._toggleEntity(input.dataset.toggleEntity, input.checked);
+      });
+    });
+
+    // Brightness sliders
+    content.querySelectorAll('input[data-brightness-entity]').forEach(slider => {
+      slider.addEventListener('change', e => {
+        e.stopPropagation();
+        this._setBrightness(slider.dataset.brightnessEntity, parseInt(slider.value));
       });
     });
   }
@@ -507,6 +631,7 @@ class Zigbee2HASSPanel extends HTMLElement {
 
     const actionHtml = action ? `
       <span class="stat"><span class="action-chip" title="Last action">${this._escHtml(String(action))}</span></span>` : '';
+    const entityHtml = this._entitiesHtml(d.ieee_address);
 
     return `
       <div class="card ${d.available ? '' : 'unavailable'}" data-ieee="${ieee}">
@@ -527,6 +652,7 @@ class Zigbee2HASSPanel extends HTMLElement {
           <span class="stat" title="Last seen">🕐 ${lastSeen}</span>
           ${actionHtml}
         </div>
+        ${entityHtml}
         <div class="actions">
           <button class="btn-ghost btn-sm" data-action="ping" data-ieee="${ieee}" title="Ping device">Ping</button>
           <button class="btn-danger btn-sm" data-action="remove" data-ieee="${ieee}" title="Remove device">Remove</button>
@@ -540,6 +666,92 @@ class Zigbee2HASSPanel extends HTMLElement {
       `<div class="lqi-bar ${i < level ? 'lit' : ''}" style="height:${h}px"></div>`
     ).join('');
     return `<span class="lqi-bars">${bars}</span>`;
+  }
+
+  _entitiesHtml(ieee) {
+    const haDeviceId = this._haDeviceMap?.[ieee];
+    const entityIds  = haDeviceId ? (this._haEntityMap?.[haDeviceId] ?? []) : [];
+    if (!entityIds.length) return '';
+    const rows = entityIds.map(eid => {
+      const s = this._hass?.states?.[eid];
+      if (!s) return '';
+      const domain     = eid.split('.')[0];
+      const friendlyName = s.attributes?.friendly_name ?? eid;
+      const isOn       = s.state === 'on';
+      const isUnavail  = s.state === 'unavailable';
+      const stateLabel = isUnavail ? 'unavail' : s.state;
+      const icon       = this._entityIcon(domain, s);
+      const nameHtml   = `<span class="entity-label" title="${this._escHtml(eid)}">${this._escHtml(friendlyName)}</span>`;
+      const stateHtml  = `<span class="entity-state ${isOn ? 'on' : ''}">${this._escHtml(stateLabel)}</span>`;
+
+      let controlHtml = '';
+      if ((domain === 'light' || domain === 'switch' || domain === 'automation') && !isUnavail) {
+        controlHtml = `
+          <label class="toggle" title="Toggle">
+            <input type="checkbox" data-toggle-entity="${this._escHtml(eid)}" ${isOn ? 'checked' : ''}>
+            <span class="slider"></span>
+          </label>`;
+      }
+      let brightnessHtml = '';
+      if (domain === 'light' && isOn && s.attributes?.brightness != null) {
+        const pct = Math.round((s.attributes.brightness / 255) * 100);
+        brightnessHtml = `
+          <div class="brightness-row">
+            <span class="brightness-label">Brightness</span>
+            <input class="brightness-slider" type="range" min="1" max="100" value="${pct}"
+                   data-brightness-entity="${this._escHtml(eid)}">
+          </div>`;
+      }
+
+      return `
+        <div class="entity-row">
+          <span class="entity-icon">${icon}</span>
+          ${nameHtml}${stateHtml}${controlHtml}
+        </div>${brightnessHtml}`;
+    }).join('');
+    return rows ? `<div class="entities-section">${rows}</div>` : '';
+  }
+
+  _toggleEntity(entityId, turnOn) {
+    const domain  = entityId.split('.')[0];
+    const service = turnOn ? 'turn_on' : 'turn_off';
+    this._hass.callService(domain, service, {}, { entity_id: entityId });
+  }
+
+  _setBrightness(entityId, pct) {
+    this._hass.callService('light', 'turn_on', { brightness_pct: pct }, { entity_id: entityId });
+  }
+
+  _entityIcon(domain, stateObj) {
+    const dc = stateObj?.attributes?.device_class;
+    if (domain === 'light')         return '💡';
+    if (domain === 'switch')        return '🔌';
+    if (domain === 'cover')         return '🪟';
+    if (domain === 'climate')       return '❄️';
+    if (domain === 'lock')          return '🔐';
+    if (domain === 'alarm_control_panel') return '🚨';
+    if (domain === 'automation')    return '⚙️';
+    if (domain === 'binary_sensor') {
+      if (dc === 'motion' || dc === 'occupancy') return '🏃';
+      if (dc === 'door' || dc === 'window' || dc === 'contact') return '🚪';
+      if (dc === 'smoke')  return '🔥';
+      if (dc === 'battery') return '🔋';
+      return '●';
+    }
+    if (domain === 'sensor') {
+      if (dc === 'battery')     return '🔋';
+      if (dc === 'temperature') return '🌡️';
+      if (dc === 'humidity')    return '💧';
+      if (dc === 'illuminance') return '☀️';
+      if (dc === 'power')       return '⚡';
+      if (dc === 'energy')      return '⚡';
+      return '📊';
+    }
+    if (domain === 'event')  return '🔘';
+    if (domain === 'button') return '🔘';
+    if (domain === 'device_tracker') return '📍';
+    if (domain === 'update') return '🔄';
+    return '●';
   }
 
   _deviceIcon(d) {
@@ -583,7 +795,7 @@ class Zigbee2HASSPanel extends HTMLElement {
     try {
       await this._hass.callWS({ type: 'zigbee2hass/remove_device', ieee_address: ieee });
       this._showToast('Device removed');
-      await this._loadDevices();
+      await this._fullLoad();
     } catch (err) {
       this._showToast('Remove failed: ' + (err.message ?? err));
     }
@@ -637,7 +849,7 @@ class Zigbee2HASSPanel extends HTMLElement {
     } catch (err) {
       this._showToast('Rename failed: ' + (err.message ?? err));
       // Restore original name label - just re-render
-      await this._loadDevices();
+      await this._fullLoad();
     }
   }
 
