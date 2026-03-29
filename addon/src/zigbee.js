@@ -209,7 +209,13 @@ class ZigbeeController {
     });
     h.on('deviceAnnounce',          (d)    => this.emit('device_announce',            d.device));  // raw device for definition lookup
     h.on('deviceLeave',             (d)    => this.emit('device_leave',               { ieee_address: d.ieeeAddr }));
-    h.on('message',                 (msg)  => this.emit('device_message',             this._normalizeMessage(msg)));
+    h.on('message',                 (msg)  => {
+      // Skip OTA cluster messages — herdsman handles queryNextImageRequest
+      // internally (responds with NOT_AVAILABLE). Emitting them as device_message
+      // floods the bus every few seconds for battery devices with OTA enabled.
+      if (msg.cluster === 'genOta') return;
+      this.emit('device_message', this._normalizeMessage(msg));
+    });
     h.on('permitJoinChanged',       (d)    => this.emit('permit_join_changed',        d));
     h.on('lastSeenChanged',         (d)    => this.emit('last_seen_changed',          { ieee_address: d.device.ieeeAddr, last_seen: d.device.lastSeen }));
   }

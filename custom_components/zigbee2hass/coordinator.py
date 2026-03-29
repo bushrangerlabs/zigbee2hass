@@ -169,8 +169,21 @@ class Zigbee2HASSCoordinator:
 
         elif topic == TOPIC_DEVICE_LEFT:
             ieee = payload.get("ieee_address")
-            if ieee in self.devices:
-                del self.devices[ieee]
+            if ieee:
+                if ieee in self.devices:
+                    del self.devices[ieee]
+                # Remove device and all its entities from HA
+                dev_reg = dr.async_get(self.hass)
+                device_entry = dev_reg.async_get_device(
+                    identifiers={(DOMAIN, ieee)}
+                )
+                if device_entry:
+                    dev_reg.async_remove_device(device_entry.id)
+                # Let platforms do any extra cleanup
+                self.hass.bus.fire(f"{DOMAIN}_device_left", {
+                    "entry_id":   self.entry.entry_id,
+                    "ieee_address": ieee,
+                })
 
         elif topic == TOPIC_PERMIT_JOIN:
             self.permit_join = payload.get("permit", False)
@@ -215,9 +228,19 @@ class Zigbee2HASSCoordinator:
         if ieee not in self.devices:
             self.devices[ieee] = {"device": {}, "definition": None, "state": {}, "available": True}
 
-        # Merge state update
-        self.devices[ieee]["state"].update(payload.get("state", {}))
+        state_update = payload.get("state", {})
+        self.devices[ieee]["state"].update(state_update)
         self._dispatch_device(ieee)
+
+        # Fire HA event for action values — lets automations trigger on button
+        # presses without needing to track sensor entity state transitions.
+        action = state_update.get("action")
+        if action is not None and action != "":
+            self.hass.bus.fire(f"{DOMAIN}_action", {
+                "ieee_address": ieee,
+                "action":       action,
+                "entry_id":     self.entry.entry_id,
+            })
 
     def _handle_device_availability(self, payload: dict) -> None:
         ieee = payload.get("ieee_address")

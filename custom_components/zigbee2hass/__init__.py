@@ -26,6 +26,7 @@ from .services import async_register_services, async_unregister_services
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [
+    Platform.BUTTON,
     Platform.LIGHT,
     Platform.SWITCH,
     Platform.SENSOR,
@@ -53,6 +54,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         raise ConfigEntryNotReady(f"Cannot connect to Zigbee2HASS add-on at {host}:{port}") from exc
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
+
+    # Register the coordinator/bridge as a device in HA so button and other
+    # bridge-level entities have a parent device to attach to.
+    dev_reg = dr.async_get(hass)
+    dev_reg.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, "coordinator")},
+        name="Zigbee2HASS Bridge",
+        manufacturer="Zigbee2HASS",
+        model="Zigbee Coordinator",
+    )
 
     try:
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
