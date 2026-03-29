@@ -178,6 +178,26 @@ class ZigbeeController {
     await this.herdsman.getCoordinatorVersion();
   }
 
+  // ── Device removal ──────────────────────────────────────────────────────────
+
+  /**
+   * Remove a device from the Zigbee network and from the herdsman database.
+   * A leave request is sent first (best-effort); the device is always removed
+   * from the DB even if the radio command fails (e.g. device is offline).
+   */
+  async removeDevice(ieeeAddress) {
+    if (!this.herdsman) throw new Error('Coordinator not started');
+    const device = this.herdsman.getDeviceByIeeeAddr(ieeeAddress);
+    if (!device) throw new Error(`Device not found: ${ieeeAddress}`);
+    try {
+      await device.removeFromNetwork();
+    } catch (err) {
+      this.log.warn(`[zigbee] removeFromNetwork failed for ${ieeeAddress}: ${err.message} — removing from DB anyway`);
+    }
+    await device.removeFromDatabase();
+    this.log.info(`[zigbee] Device removed: ${ieeeAddress}`);
+  }
+
   // ── NVRam backup ──────────────────────────────────────────────────────────
 
   async backup() {

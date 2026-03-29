@@ -10,8 +10,11 @@ Architecture:
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any
 
+from homeassistant.components.frontend import async_register_built_in_panel, async_remove_panel
+from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
@@ -19,6 +22,7 @@ from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr
 
 from .const import DOMAIN
+from .panel_api import async_register_panel_api
 from .websocket_client import Zigbee2HASSClient
 from .coordinator import Zigbee2HASSCoordinator
 from .services import async_register_services, async_unregister_services
@@ -77,6 +81,35 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     except Exception as exc:
         _LOGGER.error("Zigbee2HASS service registration failed — %s", exc, exc_info=True)
 
+    # Register the Zigbee panel and its HA WebSocket API — do this only once
+    # for the whole domain (guard against multiple config entries).
+    domain_data = hass.data[DOMAIN]
+    if not domain_data.get("_panel_registered"):
+        domain_data["_panel_registered"] = True
+
+        www_path = Path(__file__).parent / "www"
+        await hass.http.async_register_static_paths([
+            StaticPathConfig("/zigbee2hass/panel", str(www_path), cache_headers=False),
+        ])
+
+        async_register_built_in_panel(
+            hass,
+            component_name="custom",
+            sidebar_title="Zigbee",
+            sidebar_icon="mdi:zigbee",
+            frontend_url_path="zigbee2hass-panel",
+            config={
+                "_panel_custom": {
+                    "name":   "zigbee2hass-panel",
+                    "js_url": "/zigbee2hass/panel/zigbee2hass-panel.js",
+                }
+            },
+            require_admin=False,
+        )
+
+        async_register_panel_api(hass)
+        _LOGGER.info("Zigbee2HASS panel registered at /zigbee2hass-panel")
+
     entry.async_on_unload(entry.add_update_listener(async_update_options))
 
     _LOGGER.info("Zigbee2HASS setup complete for %s:%s", host, port)
@@ -90,6 +123,15 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if unload_ok:
         coordinator: Zigbee2HASSCoordinator = hass.data[DOMAIN].pop(entry.entry_id)
         await coordinator.async_stop()
+
+        # Remove the panel when the last config entry is gone
+        remaining = [k for k in hass.data[DOMAIN] if k != "_panel_registered"]
+        if not remaining:
+            try:
+                async_remove_panel(hass, "zigbee2hass-panel")
+                hass.data[DOMAIN].pop("_panel_registered", None)
+            except Exception:
+                pass
 
     return unload_ok
 

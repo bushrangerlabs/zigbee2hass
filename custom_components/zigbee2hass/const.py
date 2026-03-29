@@ -12,6 +12,7 @@ TOPIC_DEVICE_AVAIL      = "zigbee2hass/device/availability"
 TOPIC_DEVICE_JOINED     = "zigbee2hass/device/joined"
 TOPIC_DEVICE_LEFT       = "zigbee2hass/device/left"
 TOPIC_DEVICE_READY      = "zigbee2hass/device/ready"
+TOPIC_DEVICE_RENAMED    = "zigbee2hass/device/renamed"
 TOPIC_PERMIT_JOIN       = "zigbee2hass/permitjoin"
 TOPIC_ERROR             = "zigbee2hass/error"
 

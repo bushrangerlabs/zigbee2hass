@@ -25,6 +25,7 @@ from .const import (
     TOPIC_DEVICE_AVAIL,
     TOPIC_DEVICE_LEFT,
     TOPIC_DEVICE_READY,
+    TOPIC_DEVICE_RENAMED,
     TOPIC_DEVICE_STATE,
     TOPIC_PERMIT_JOIN,
 )
@@ -133,6 +134,15 @@ class Zigbee2HASSCoordinator:
     async def async_get_health(self) -> dict:
         return await self._client.request("health")
 
+    async def async_remove_device(self, ieee_address: str) -> None:
+        await self._client.request("remove_device", {"ieee_address": ieee_address})
+
+    async def async_rename_device(self, ieee_address: str, name: str) -> None:
+        result = await self._client.request("rename_device", {"ieee_address": ieee_address, "name": name})
+        # Update local cache so panel sees the new name immediately
+        if ieee_address in self.devices:
+            self.devices[ieee_address]["device"]["friendly_name"] = result.get("friendly_name", name)
+
     # ── Internal callbacks ────────────────────────────────────────────────
 
     @callback
@@ -166,6 +176,12 @@ class Zigbee2HASSCoordinator:
 
         elif topic == TOPIC_DEVICE_READY:
             self._handle_device_ready(payload)
+
+        elif topic == TOPIC_DEVICE_RENAMED:
+            ieee = payload.get("ieee_address")
+            name = payload.get("friendly_name")
+            if ieee and ieee in self.devices and name:
+                self.devices[ieee]["device"]["friendly_name"] = name
 
         elif topic == TOPIC_DEVICE_LEFT:
             ieee = payload.get("ieee_address")

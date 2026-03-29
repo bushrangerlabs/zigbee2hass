@@ -119,9 +119,10 @@ class WebSocketAPI {
       this._send(ws, 'zigbee2hass/bridge/devices', {
         devices: devices.map(d => ({
           ...d,
-          definition:  definitions[d.ieee_address] ?? null,
-          state:       allStates[d.ieee_address] ?? {},
-          available:   this.devices.getAvailability(d.ieee_address).available,
+          friendly_name: this.devices.getFriendlyName(d.ieee_address) ?? d.model_id ?? d.ieee_address,
+          definition:    definitions[d.ieee_address] ?? null,
+          state:         allStates[d.ieee_address] ?? {},
+          available:     this.devices.getAvailability(d.ieee_address).available,
         })),
         health,
       });
@@ -146,10 +147,28 @@ class WebSocketAPI {
           const allStates   = this.devices.getAllStates();
           reply(devices.map(d => ({
             ...d,
-            definition: definitions[d.ieee_address] ?? null,
-            state:      allStates[d.ieee_address] ?? {},
-            available:  this.devices.getAvailability(d.ieee_address).available,
+            friendly_name: this.devices.getFriendlyName(d.ieee_address) ?? d.model_id ?? d.ieee_address,
+            definition:    definitions[d.ieee_address] ?? null,
+            state:         allStates[d.ieee_address] ?? {},
+            available:     this.devices.getAvailability(d.ieee_address).available,
           })));
+          break;
+        }
+
+        case 'rename_device': {
+          const { ieee_address, name } = payload;
+          this.devices.setFriendlyName(ieee_address, name);
+          this.broadcast('zigbee2hass/device/renamed', { ieee_address, friendly_name: name });
+          reply({ ieee_address, friendly_name: name });
+          break;
+        }
+
+        case 'remove_device': {
+          const { ieee_address } = payload;
+          await this.zigbee.removeDevice(ieee_address);
+          this.devices.onDeviceLeave(ieee_address);
+          this.broadcast('zigbee2hass/device/left', { ieee_address });
+          reply({ ieee_address, removed: true });
           break;
         }
 

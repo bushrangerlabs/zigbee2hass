@@ -34,6 +34,8 @@ class DeviceManager {
     this._availability = new Map();
     /** @type {Map<string, {resolve, reject, timer}>} pending command confirmations */
     this._pendingCommands = new Map();
+    /** @type {Map<string, string>} ieee_address → user-assigned friendly name */
+    this._friendlyNames = new Map();
 
     this._availabilityTimer = null;
   }
@@ -219,6 +221,18 @@ class DeviceManager {
 
   getAvailability(ieee_address) {
     return this._availability.get(ieee_address) ?? { available: false };
+  }
+
+  setFriendlyName(ieee_address, name) {
+    if (name) {
+      this._friendlyNames.set(ieee_address, name);
+    } else {
+      this._friendlyNames.delete(ieee_address);
+    }
+  }
+
+  getFriendlyName(ieee_address) {
+    return this._friendlyNames.get(ieee_address) ?? null;
   }
 
   // ── Commands with confirmation ────────────────────────────────────────────
