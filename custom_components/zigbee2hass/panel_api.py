@@ -80,10 +80,8 @@ async def ws_get_devices(
 
 @websocket_api.websocket_command({
     "type": "zigbee2hass/permit_join",
-    "schema": websocket_api.BASE_COMMAND_MESSAGE_SCHEMA.extend({
-        vol.Required("permit"):            bool,
-        vol.Optional("timeout", default=254): int,
-    }),
+    vol.Required("permit"):             bool,
+    vol.Optional("timeout", default=254): int,
 })
 @websocket_api.require_admin
 @websocket_api.async_response
@@ -103,9 +101,7 @@ async def ws_permit_join(
 
 @websocket_api.websocket_command({
     "type": "zigbee2hass/remove_device",
-    "schema": websocket_api.BASE_COMMAND_MESSAGE_SCHEMA.extend({
-        vol.Required("ieee_address"): str,
-    }),
+    vol.Required("ieee_address"): str,
 })
 @websocket_api.require_admin
 @websocket_api.async_response
@@ -125,10 +121,8 @@ async def ws_remove_device(
 
 @websocket_api.websocket_command({
     "type": "zigbee2hass/rename_device",
-    "schema": websocket_api.BASE_COMMAND_MESSAGE_SCHEMA.extend({
-        vol.Required("ieee_address"): str,
-        vol.Required("name"):         str,
-    }),
+    vol.Required("ieee_address"): str,
+    vol.Required("name"):         str,
 })
 @websocket_api.require_admin
 @websocket_api.async_response
@@ -148,9 +142,7 @@ async def ws_rename_device(
 
 @websocket_api.websocket_command({
     "type": "zigbee2hass/ping_device",
-    "schema": websocket_api.BASE_COMMAND_MESSAGE_SCHEMA.extend({
-        vol.Required("ieee_address"): str,
-    }),
+    vol.Required("ieee_address"): str,
 })
 @websocket_api.async_response
 async def ws_ping_device(
