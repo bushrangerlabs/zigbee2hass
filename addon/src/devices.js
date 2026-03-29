@@ -48,9 +48,10 @@ class DeviceManager {
       const definition = zhc.findByDevice(rawDevice);
       if (definition) {
         this._definitions.set(ieee, definition);
-        this.log.info(`[devices] Loaded definition for ${ieee}: ${definition.model}`);
+        const label = definition.model ?? '(fingerprint-only, modelID not read)';
+        this.log.info(`[devices] Loaded definition for ${ieee}: ${label}`);
       } else {
-        this.log.warn(`[devices] No definition for ${ieee} (${rawDevice.modelID}) — will retry on interview`);
+        this.log.warn(`[devices] No definition for ${ieee} (modelID=${rawDevice.modelID}) — will retry on interview`);
       }
       if (!this._state.has(ieee)) this._state.set(ieee, {});
       if (!this._availability.has(ieee)) this._availability.set(ieee, { available: true, last_seen: Date.now() });
@@ -88,9 +89,11 @@ class DeviceManager {
       const definition = zhc.findByDevice(rawDevice);
       if (definition) {
         this._definitions.set(ieee, definition);
-        this.log.info(`[devices] Definition found on announce for ${ieee}: ${definition.model}`);
+        const label = definition.model ?? '(fingerprint-only, modelID not read)';
+        this.log.info(`[devices] Definition found on announce for ${ieee}: ${label}`);
+        this.log.debug(`[devices] Full definition: ${JSON.stringify({ model: definition.model, vendor: definition.vendor, description: definition.description, exposes: definition.exposes?.length ?? 'N/A' })}`);
       } else {
-        this.log.warn(`[devices] No definition on announce for ${ieee} (${rawDevice.modelID})`);
+        this.log.warn(`[devices] No definition on announce for ${ieee} (modelID=${rawDevice.modelID})`);
       }
     }
 
@@ -118,9 +121,11 @@ class DeviceManager {
 
     if (definition) {
       this._definitions.set(ieee, definition);
-      this.log.info(`[devices] Definition found for ${ieee}: ${definition.model}`);
+      const label = definition.model ?? '(fingerprint-only, modelID not read)';
+      this.log.info(`[devices] Definition found for ${ieee}: ${label}`);
+      this.log.debug(`[devices] Full definition: ${JSON.stringify({ model: definition.model, vendor: definition.vendor, description: definition.description, exposes: definition.exposes?.length ?? 'N/A', exposes_types: (definition.exposes ?? []).map(e => e.type) })}`);
     } else {
-      this.log.warn(`[devices] No definition found for ${ieee} (${rawDevice.modelID})`);
+      this.log.warn(`[devices] No definition found for ${ieee} (modelID=${rawDevice.modelID})`);
     }
     this._state.set(ieee, {});
     this._availability.set(ieee, { available: true, last_seen: Date.now() });
@@ -350,10 +355,10 @@ class DeviceManager {
 
   _serializeDefinition(def) {
     return {
-      model:        def.model,
-      vendor:       def.vendor,
-      description:  def.description,
-      exposes:      def.exposes ?? [],
+      model:        def.model        ?? null,
+      vendor:       def.vendor       ?? null,
+      description:  def.description  ?? null,
+      exposes:      def.exposes      ?? [],
       supports_ota: !!def.ota,
     };
   }
