@@ -455,9 +455,10 @@ class Zigbee2HASSPanel extends HTMLElement {
         (this._haEntityMap[ent.device_id] ??= []).push(ent.entity_id);
       }
 
-      console.debug('[zigbee2hass] devReg', devReg.length, 'entReg', entReg.length,
-        'haDeviceMap', Object.keys(this._haDeviceMap),
-        'haEntityMap', this._haEntityMap);
+      console.log('[zigbee2hass] devReg', devReg.length, 'entReg', entReg.length,
+        '\nhaDeviceMap', JSON.stringify(this._haDeviceMap),
+        '\ndevice ieee list', this._devices.map(d => d.ieee_address),
+        '\ndevReg sample', devReg.slice(0,2).map(d => ({ id: d.id, identifiers: d.identifiers })));
 
       this._loading = false;
       this._error   = null;
@@ -554,8 +555,10 @@ class Zigbee2HASSPanel extends HTMLElement {
       label.textContent = 'error';
     } else if (this._bridgeAvailable) {
       dot.className = 'dot online';
-      const endCount = this._devices.filter(d => d.type !== 'Coordinator').length;
-      label.textContent = `online — ${endCount} device${endCount !== 1 ? 's' : ''}`;
+      const endCount  = this._devices.filter(d => d.type !== 'Coordinator').length;
+      const mapCount  = Object.keys(this._haDeviceMap ?? {}).length;
+      const entCount  = Object.values(this._haEntityMap ?? {}).reduce((s, a) => s + a.length, 0);
+      label.textContent = `online — ${endCount} device${endCount !== 1 ? 's' : ''} · ${mapCount} mapped · ${entCount} entities`;
     } else {
       dot.className = 'dot offline';
       label.textContent = 'bridge offline';
