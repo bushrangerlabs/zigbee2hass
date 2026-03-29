@@ -45,10 +45,10 @@ class DeviceManager {
     for (const rawDevice of this.zigbee.getRawDevices()) {
       const ieee = rawDevice.ieeeAddr;
       if (rawDevice.type === 'Coordinator') continue;
-      const definition = zhc.findByDevice(rawDevice);
+      const definition = this._resolveDefinition(rawDevice);
       if (definition) {
         this._definitions.set(ieee, definition);
-        const label = definition.model ?? '(fingerprint-only, modelID not read)';
+        const label = definition.model ?? '(no model name)';
         this.log.info(`[devices] Loaded definition for ${ieee}: ${label}`);
       } else {
         this.log.warn(`[devices] No definition for ${ieee} (modelID=${rawDevice.modelID}) — will retry on interview`);
@@ -86,12 +86,10 @@ class DeviceManager {
 
     // Re-run findByDevice in case it wasn't loaded at startup
     if (!this._definitions.has(ieee)) {
-      const definition = zhc.findByDevice(rawDevice);
+      const definition = this._resolveDefinition(rawDevice);
       if (definition) {
         this._definitions.set(ieee, definition);
-        const label = definition.model ?? '(fingerprint-only, modelID not read)';
-        this.log.info(`[devices] Definition found on announce for ${ieee}: ${label}`);
-        this.log.debug(`[devices] Full definition: ${JSON.stringify({ model: definition.model, vendor: definition.vendor, description: definition.description, exposes: definition.exposes?.length ?? 'N/A' })}`);
+        this.log.info(`[devices] Definition found on announce for ${ieee}: ${definition.model ?? '(no model name)'}`);
       } else {
         this.log.warn(`[devices] No definition on announce for ${ieee} (modelID=${rawDevice.modelID})`);
       }
@@ -116,14 +114,12 @@ class DeviceManager {
    */
   onDeviceInterview(rawDevice) {
     // rawDevice is the herdsman Device instance — required by zhc.findByDevice
-    const definition = zhc.findByDevice(rawDevice);
+    const definition = this._resolveDefinition(rawDevice);
     const ieee = rawDevice.ieeeAddr;
 
     if (definition) {
       this._definitions.set(ieee, definition);
-      const label = definition.model ?? '(fingerprint-only, modelID not read)';
-      this.log.info(`[devices] Definition found for ${ieee}: ${label}`);
-      this.log.debug(`[devices] Full definition: ${JSON.stringify({ model: definition.model, vendor: definition.vendor, description: definition.description, exposes: definition.exposes?.length ?? 'N/A', exposes_types: (definition.exposes ?? []).map(e => e.type) })}`);
+      this.log.info(`[devices] Definition found for ${ieee}: ${definition.model ?? '(no model name)'} (vendor=${definition.vendor ?? '?'}, exposes=${Array.isArray(definition.exposes) ? definition.exposes.length : typeof definition.exposes})`);
     } else {
       this.log.warn(`[devices] No definition found for ${ieee} (modelID=${rawDevice.modelID})`);
     }
@@ -353,12 +349,50 @@ class DeviceManager {
     }
   }
 
+  /**
+   * Look up the zhc definition for a raw herdsman Device object.
+   * findByDevice() sometimes returns a fingerprint-only stub with no exposes/vendor.
+   * When that happens, fall back to matching via rawDevice.modelID through the
+   * zigbeeModel arrays in the full definitions list.
+   */
+  _resolveDefinition(rawDevice) {
+    let def = zhc.findByDevice(rawDevice);
+
+    // If findByDevice returned a stub (missing vendor = no real data), upgrade.
+    // Also try if findByDevice returned null entirely.
+    if ((!def || !def.vendor) && rawDevice.modelID) {
+      const allDefs = zhc.definitions ?? [];
+      const byModel = allDefs.find(d =>
+        (d.zigbeeModel && d.zigbeeModel.includes(rawDevice.modelID)) ||
+        d.model === rawDevice.modelID
+      );
+      if (byModel) {
+        this.log.debug(`[devices] Upgraded to full definition via modelID '${rawDevice.modelID}': ${byModel.model}`);
+        def = byModel;
+      }
+    }
+
+    if (def) {
+      const exposeType = typeof def.exposes;
+      const exposeLen  = Array.isArray(def.exposes) ? def.exposes.length : (exposeType === 'function' ? 'fn' : exposeType);
+      this.log.debug(`[devices] Resolved: model=${def.model}, vendor=${def.vendor}, exposes=${exposeLen}`);
+    }
+    return def ?? null;
+  }
+
   _serializeDefinition(def) {
+    // In zhc v25, exposes may be a function that takes (device, options).
+    let exposes;
+    if (typeof def.exposes === 'function') {
+      try { exposes = def.exposes(null, {}) ?? []; } catch { exposes = []; }
+    } else {
+      exposes = def.exposes ?? [];
+    }
     return {
       model:        def.model        ?? null,
       vendor:       def.vendor       ?? null,
       description:  def.description  ?? null,
-      exposes:      def.exposes      ?? [],
+      exposes,
       supports_ota: !!def.ota,
     };
   }
