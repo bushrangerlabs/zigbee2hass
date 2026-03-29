@@ -44,12 +44,18 @@ class DeviceManager {
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
-  start() {
+  async start() {
     // Load definitions for already-paired devices from herdsman database
-    for (const rawDevice of this.zigbee.getRawDevices()) {
+    // findByDevice is async in zhc v25 — resolve all in parallel for speed
+    const rawDevices = this.zigbee.getRawDevices().filter(d => d.type !== 'Coordinator');
+    const resolved = await Promise.all(
+      rawDevices.map(async rawDevice => ({
+        rawDevice,
+        definition: await this._resolveDefinition(rawDevice),
+      }))
+    );
+    for (const { rawDevice, definition } of resolved) {
       const ieee = rawDevice.ieeeAddr;
-      if (rawDevice.type === 'Coordinator') continue;
-      const definition = this._resolveDefinition(rawDevice);
       if (definition) {
         this._definitions.set(ieee, definition);
         this._rawDevices.set(ieee, rawDevice);
@@ -85,13 +91,13 @@ class DeviceManager {
    * Called when an already-interviewed device announces itself (re-join / power-on).
    * The device is already in herdsman DB; we just need to fire device_ready.
    */
-  onDeviceAnnounce(rawDevice) {
+  async onDeviceAnnounce(rawDevice) {
     const ieee = rawDevice.ieeeAddr;
     if (rawDevice.type === 'Coordinator') return;
 
     // Re-run findByDevice in case it wasn't loaded at startup
     if (!this._definitions.has(ieee)) {
-      const definition = this._resolveDefinition(rawDevice);
+      const definition = await this._resolveDefinition(rawDevice);
       if (definition) {
         this._definitions.set(ieee, definition);
         this._rawDevices.set(ieee, rawDevice);
@@ -118,9 +124,9 @@ class DeviceManager {
    * Called when a device successfully completes interview.
    * Look up its definition in zigbee-herdsman-converters and cache it.
    */
-  onDeviceInterview(rawDevice) {
+  async onDeviceInterview(rawDevice) {
     // rawDevice is the herdsman Device instance — required by zhc.findByDevice
-    const definition = this._resolveDefinition(rawDevice);
+    const definition = await this._resolveDefinition(rawDevice);
     const ieee = rawDevice.ieeeAddr;
 
     if (definition) {
@@ -373,27 +379,10 @@ class DeviceManager {
 
   /**
    * Look up the zhc definition for a raw herdsman Device object.
-   * findByDevice() sometimes returns a fingerprint-only stub with no exposes/vendor.
-   * When that happens, fall back to matching via rawDevice.modelID through the
-   * zigbeeModel arrays in the full definitions list.
+   * findByDevice() is async in zhc v25 — must be awaited.
    */
-  _resolveDefinition(rawDevice) {
-    let def = zhc.findByDevice(rawDevice);
-
-    // If findByDevice returned a stub (missing vendor = no real data), upgrade.
-    // Also try if findByDevice returned null entirely.
-    if ((!def || !def.vendor) && rawDevice.modelID) {
-      const allDefs = zhc.definitions ?? [];
-      const byModel = allDefs.find(d =>
-        (d.zigbeeModel && d.zigbeeModel.includes(rawDevice.modelID)) ||
-        d.model === rawDevice.modelID
-      );
-      if (byModel) {
-        this.log.debug(`[devices] Upgraded to full definition via modelID '${rawDevice.modelID}': ${byModel.model}`);
-        def = byModel;
-      }
-    }
-
+  async _resolveDefinition(rawDevice) {
+    const def = await zhc.findByDevice(rawDevice);
     if (def) {
       const exposeType = typeof def.exposes;
       const exposeLen  = Array.isArray(def.exposes) ? def.exposes.length : (exposeType === 'function' ? 'fn' : exposeType);

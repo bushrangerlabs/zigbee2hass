@@ -100,7 +100,7 @@ async function main() {
 
   try {
     await zigbee.start();
-    devices.start();
+    await devices.start();
     wsApi.start();
 
     // Initial backup after coordinator starts
