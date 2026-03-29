@@ -28,6 +28,8 @@ class DeviceManager {
 
     /** @type {Map<string, object>} ieee_address → device definition (from converters) */
     this._definitions = new Map();
+    /** @type {Map<string, object>} ieee_address → raw herdsman Device (needed to call exposes functions) */
+    this._rawDevices  = new Map();
     /** @type {Map<string, object>} ieee_address → current state */
     this._state       = new Map();
     /** @type {Map<string, object>} ieee_address → availability metadata */
@@ -50,6 +52,7 @@ class DeviceManager {
       const definition = this._resolveDefinition(rawDevice);
       if (definition) {
         this._definitions.set(ieee, definition);
+        this._rawDevices.set(ieee, rawDevice);
         const label = definition.model ?? '(no model name)';
         this.log.info(`[devices] Loaded definition for ${ieee}: ${label}`);
       } else {
@@ -91,6 +94,7 @@ class DeviceManager {
       const definition = this._resolveDefinition(rawDevice);
       if (definition) {
         this._definitions.set(ieee, definition);
+        this._rawDevices.set(ieee, rawDevice);
         this.log.info(`[devices] Definition found on announce for ${ieee}: ${definition.model ?? '(no model name)'}`);
       } else {
         this.log.warn(`[devices] No definition on announce for ${ieee} (modelID=${rawDevice.modelID})`);
@@ -106,7 +110,7 @@ class DeviceManager {
 
     this.emit('device_ready', {
       device: this.zigbee.serializeDevice(rawDevice),
-      definition: definition ? this._serializeDefinition(definition) : null,
+      definition: definition ? this._serializeDefinition(definition, rawDevice) : null,
     });
   }
 
@@ -121,6 +125,7 @@ class DeviceManager {
 
     if (definition) {
       this._definitions.set(ieee, definition);
+      this._rawDevices.set(ieee, rawDevice);
       this.log.info(`[devices] Definition found for ${ieee}: ${definition.model ?? '(no model name)'} (vendor=${definition.vendor ?? '?'}, exposes=${Array.isArray(definition.exposes) ? definition.exposes.length : typeof definition.exposes})`);
     } else {
       this.log.warn(`[devices] No definition found for ${ieee} (modelID=${rawDevice.modelID})`);
@@ -130,7 +135,7 @@ class DeviceManager {
 
     this.emit('device_ready', {
       device: this.zigbee.serializeDevice(rawDevice),
-      definition: definition ? this._serializeDefinition(definition) : null,
+      definition: definition ? this._serializeDefinition(definition, rawDevice) : null,
     });
   }
 
@@ -188,6 +193,7 @@ class DeviceManager {
 
   onDeviceLeave(ieee_address) {
     this._definitions.delete(ieee_address);
+    this._rawDevices.delete(ieee_address);
     this._state.delete(ieee_address);
     this._availability.delete(ieee_address);
   }
@@ -208,13 +214,15 @@ class DeviceManager {
 
   getDefinition(ieee_address) {
     const def = this._definitions.get(ieee_address);
-    return def ? this._serializeDefinition(def) : null;
+    const raw = this._rawDevices.get(ieee_address) ?? null;
+    return def ? this._serializeDefinition(def, raw) : null;
   }
 
   getAllDefinitions() {
     const result = {};
     for (const [addr, def] of this._definitions) {
-      result[addr] = this._serializeDefinition(def);
+      const raw = this._rawDevices.get(addr) ?? null;
+      result[addr] = this._serializeDefinition(def, raw);
     }
     return result;
   }
@@ -394,11 +402,15 @@ class DeviceManager {
     return def ?? null;
   }
 
-  _serializeDefinition(def) {
+  _serializeDefinition(def, rawDevice = null) {
     // In zhc v25, exposes may be a function that takes (device, options).
+    // Pass the actual herdsman device so it can read endpoints/clusters.
     let exposes;
     if (typeof def.exposes === 'function') {
-      try { exposes = def.exposes(null, {}) ?? []; } catch { exposes = []; }
+      try { exposes = def.exposes(rawDevice, {}) ?? []; } catch (e) {
+        this.log.warn(`[devices] exposes() threw for ${rawDevice?.modelID ?? '?'}: ${e.message}`);
+        exposes = [];
+      }
     } else {
       exposes = def.exposes ?? [];
     }
