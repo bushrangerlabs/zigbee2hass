@@ -150,7 +150,7 @@ class DeviceManager {
    * Converts it to a state update using the device's exposes/converters.
    */
   onMessage(msg) {
-    const { ieee_address, cluster, data, link_quality, endpoint: endpointId } = msg;
+    const { ieee_address, cluster, data, link_quality, endpoint_id } = msg;
 
     // Update last_seen and availability
     const avail = this._availability.get(ieee_address) ?? {};
@@ -164,31 +164,20 @@ class DeviceManager {
     const definition = this._definitions.get(ieee_address);
     if (!definition) return; // device not yet interviewed
 
-    // Build raw device/endpoint objects required by zhc v25 converters.
-    // zhc fromZigbee converters expect msg.device = raw herdsman Device and
-    // msg.endpoint = raw Endpoint (not just the numeric ID).  They also expect
-    // meta.logger, meta.state and meta.options to be present.
-    const rawDevice   = this._rawDevices.get(ieee_address);
-    const rawEndpoint = rawDevice?.getEndpoint ? rawDevice.getEndpoint(endpointId) : undefined;
-
+    // zhc v25 fromZigbee converters expect:
+    //   msg.endpoint  = raw herdsman Endpoint (for zclTransactionSequenceNumber etc.)
+    //   msg.device    = raw herdsman Device
+    //   msg.meta      = { zclTransactionSequenceNumber, ... }  (deduplication)
+    // _normalizeMessage now preserves these, so msg is already suitable.
+    // We only need to supply the 'meta' argument (converter context).
+    const rawDevice = this._rawDevices.get(ieee_address);
     const meta = {
       device:   rawDevice,
-      endpoint: rawEndpoint,
+      endpoint: msg.endpoint,  // raw Endpoint (already in normalized msg)
       logger:   this.log,
       state:    this._state.get(ieee_address) ?? {},
       options:  {},
     };
-
-    // Rebuild msg with raw objects so converters that access
-    // msg.endpoint.zclTransactionSequenceNumber etc. don't crash.
-    const converterMsg = {
-      ...msg,
-      endpoint: endpointId,          // keep numeric endpointId in base field
-      device:   rawDevice,           // raw Device for converters
-      endpoint_obj: rawEndpoint,     // raw Endpoint for converters that need it
-    };
-    // Some zhc v25 converters read msg.endpoint as the raw object directly.
-    if (rawEndpoint) converterMsg.endpoint = rawEndpoint;
 
     // Run through converters to get state
     const stateUpdate = {};
@@ -199,7 +188,7 @@ class DeviceManager {
       if (!clusters.includes(cluster)) continue;
 
       try {
-        const result = converter.convert(definition, converterMsg, null, {}, meta);
+        const result = converter.convert(definition, msg, null, {}, meta);
         if (result) Object.assign(stateUpdate, result);
       } catch (err) {
         this.log.debug(`[devices] Converter error for ${ieee_address}: ${err.message}`);

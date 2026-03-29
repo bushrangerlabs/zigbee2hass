@@ -265,14 +265,21 @@ class ZigbeeController {
   }
 
   _normalizeMessage(msg) {
+    // Keep raw herdsman objects so zhc v25 fromZigbee converters receive what
+    // they expect: raw Endpoint (for zclTransactionSequenceNumber etc.),
+    // raw Device, and msg.meta (for deduplication).
     return {
       ieee_address:    msg.device.ieeeAddr,
       network_address: msg.device.networkAddress,
-      endpoint:        msg.endpoint.ID,
+      endpoint:        msg.endpoint,          // raw Endpoint object
+      endpoint_id:     msg.endpoint.ID,       // numeric ID for our own lookups
       type:            msg.type,
       cluster:         msg.cluster,
       data:            msg.data,
       link_quality:    msg.linkquality,
+      meta:            msg.meta ?? {},        // contains zclTransactionSequenceNumber
+      groupID:         msg.groupID,
+      device:          msg.device,            // raw Device object
     };
   }
 }
