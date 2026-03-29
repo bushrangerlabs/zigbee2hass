@@ -150,7 +150,7 @@ class DeviceManager {
    * Converts it to a state update using the device's exposes/converters.
    */
   onMessage(msg) {
-    const { ieee_address, cluster, data, link_quality, endpoint } = msg;
+    const { ieee_address, cluster, data, link_quality, endpoint: endpointId } = msg;
 
     // Update last_seen and availability
     const avail = this._availability.get(ieee_address) ?? {};
@@ -164,8 +164,33 @@ class DeviceManager {
     const definition = this._definitions.get(ieee_address);
     if (!definition) return; // device not yet interviewed
 
+    // Build raw device/endpoint objects required by zhc v25 converters.
+    // zhc fromZigbee converters expect msg.device = raw herdsman Device and
+    // msg.endpoint = raw Endpoint (not just the numeric ID).  They also expect
+    // meta.logger, meta.state and meta.options to be present.
+    const rawDevice   = this._rawDevices.get(ieee_address);
+    const rawEndpoint = rawDevice?.getEndpoint ? rawDevice.getEndpoint(endpointId) : undefined;
+
+    const meta = {
+      device:   rawDevice,
+      endpoint: rawEndpoint,
+      logger:   this.log,
+      state:    this._state.get(ieee_address) ?? {},
+      options:  {},
+    };
+
+    // Rebuild msg with raw objects so converters that access
+    // msg.endpoint.zclTransactionSequenceNumber etc. don't crash.
+    const converterMsg = {
+      ...msg,
+      endpoint: endpointId,          // keep numeric endpointId in base field
+      device:   rawDevice,           // raw Device for converters
+      endpoint_obj: rawEndpoint,     // raw Endpoint for converters that need it
+    };
+    // Some zhc v25 converters read msg.endpoint as the raw object directly.
+    if (rawEndpoint) converterMsg.endpoint = rawEndpoint;
+
     // Run through converters to get state
-    const meta       = { device: this.zigbee.herdsman?.getDeviceByIeeeAddr(ieee_address) };
     const stateUpdate = {};
 
     for (const converter of definition.fromZigbee ?? []) {
@@ -174,7 +199,7 @@ class DeviceManager {
       if (!clusters.includes(cluster)) continue;
 
       try {
-        const result = converter.convert(definition, msg, null, {}, meta);
+        const result = converter.convert(definition, converterMsg, null, {}, meta);
         if (result) Object.assign(stateUpdate, result);
       } catch (err) {
         this.log.debug(`[devices] Converter error for ${ieee_address}: ${err.message}`);

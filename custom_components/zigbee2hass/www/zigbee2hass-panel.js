@@ -30,8 +30,8 @@ class Zigbee2HASSPanel extends HTMLElement {
       this._fullLoad();
       this._startPolling();
     } else if (hass && prev && hass.states !== prev.states) {
-      // HA pushed updated states — re-render entity rows without a full reload
-      this._renderDevices();
+      // HA pushed updated states — update entity values in-place (no DOM tear-down)
+      this._updateEntityStates(prev.states);
     }
   }
 
@@ -218,6 +218,23 @@ class Zigbee2HASSPanel extends HTMLElement {
           white-space: nowrap;
           overflow: hidden;
           text-overflow: ellipsis;
+        }
+        .device-ieee {
+          font-size: 0.68rem;
+          color: var(--secondary-text-color, #bdbdbd);
+          font-family: monospace;
+          letter-spacing: 0.02em;
+          margin-top: 2px;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .device-img {
+          width: 40px;
+          height: 40px;
+          object-fit: contain;
+          border-radius: 4px;
+          flex-shrink: 0;
         }
 
         /* Availability indicator on top-right */
@@ -557,7 +574,11 @@ class Zigbee2HASSPanel extends HTMLElement {
       dot.className = 'dot online';
       const endCount  = this._devices.filter(d => d.type !== 'Coordinator').length;
       const mapCount  = Object.keys(this._haDeviceMap ?? {}).length;
-      const entCount  = Object.values(this._haEntityMap ?? {}).reduce((s, a) => s + a.length, 0);
+      // Only count entities that belong to Zigbee devices (not all HA entities)
+      const zigbeeDevIds = new Set(Object.values(this._haDeviceMap ?? {}));
+      const entCount  = Object.entries(this._haEntityMap ?? {})
+        .filter(([devId]) => zigbeeDevIds.has(devId))
+        .reduce((s, [, ids]) => s + ids.length, 0);
       label.textContent = `online — ${endCount} device${endCount !== 1 ? 's' : ''} · ${mapCount} mapped · ${entCount} entities`;
     } else {
       dot.className = 'dot offline';
@@ -619,6 +640,7 @@ class Zigbee2HASSPanel extends HTMLElement {
 
   _cardHtml(d) {
     const icon       = this._deviceIcon(d);
+    const imgUrl     = this._deviceImageUrl(d);
     const avail      = d.available ? 'online' : 'offline';
     const lqi        = d.state?.link_quality ?? null;
     const battery    = d.state?.battery ?? null;
@@ -629,8 +651,13 @@ class Zigbee2HASSPanel extends HTMLElement {
     const ieee       = this._escHtml(d.ieee_address);
     const incomplete = !d.interview_completed ? '⚠ ' : '';
     const metaParts  = [vendor, model].filter(Boolean);
-    const meta       = this._escHtml(metaParts.join(' — ') || d.ieee_address);
+    const meta       = this._escHtml(metaParts.join(' — '));
     const lastSeen   = d.last_seen ? this._relativeTime(d.last_seen) : '—';
+    const iconHtml   = imgUrl
+      ? `<img class="device-img" src="${this._escHtml(imgUrl)}" alt="${icon}"
+             onerror="this.style.display='none';this.nextElementSibling.style.display=''">
+         <span style="display:none">${icon}</span>`
+      : icon;
 
     const lqiHtml = lqi != null ? `
       <span class="stat" title="Link quality: ${lqi}/255">
@@ -649,7 +676,7 @@ class Zigbee2HASSPanel extends HTMLElement {
       <div class="card ${d.available ? '' : 'unavailable'}" data-ieee="${ieee}">
         <span class="avail-dot ${avail}" title="${avail}"></span>
         <div class="card-top">
-          <div class="device-icon">${icon}</div>
+          <div class="device-icon">${iconHtml}</div>
           <div class="device-info">
             <div class="device-name"
                  title="Click to rename"
@@ -657,6 +684,7 @@ class Zigbee2HASSPanel extends HTMLElement {
                  data-ieee="${ieee}"
                  id="name-${ieee.replace(/x|:/g,'')}">${incomplete}${name}</div>
             <div class="device-meta">${meta}</div>
+            <div class="device-ieee">${ieee}</div>
           </div>
         </div>
         <div class="stats">
@@ -696,10 +724,10 @@ class Zigbee2HASSPanel extends HTMLElement {
       const friendlyName = s?.attributes?.friendly_name ?? eid;
       const isOn       = s?.state === 'on';
       const isUnavail  = !s || s.state === 'unavailable';
-      const stateLabel = !s ? 'disabled' : isUnavail ? 'unavail' : s.state;
+      const stateLabel = this._formatStateLabel(domain, s);
       const icon       = this._entityIcon(domain, s);
       const nameHtml   = `<span class="entity-label" title="${this._escHtml(eid)}">${this._escHtml(friendlyName)}</span>`;
-      const stateHtml  = `<span class="entity-state ${isOn ? 'on' : ''}">${this._escHtml(stateLabel)}</span>`;
+      const stateHtml  = `<span class="entity-state ${isOn ? 'on' : ''}" data-entity-state="${this._escHtml(eid)}">${this._escHtml(stateLabel)}</span>`;
 
       let controlHtml = '';
       if (s && (domain === 'light' || domain === 'switch' || domain === 'automation') && !isUnavail) {
@@ -894,6 +922,64 @@ class Zigbee2HASSPanel extends HTMLElement {
     if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
     if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`;
     return `${Math.floor(secs / 86400)}d ago`;
+  }
+
+  /** Build zigbee2mqtt CDN image URL for a device (replace / and spaces with _). */
+  _deviceImageUrl(d) {
+    const model = d.definition?.model ?? d.model_id ?? '';
+    if (!model) return '';
+    const safe = model.replace(/[/ ]+/g, '_');
+    return `https://www.zigbee2mqtt.io/images/devices/${safe}.png`;
+  }
+
+  /** Format a HA state value for display in entity rows. */
+  _formatStateLabel(domain, s) {
+    if (!s)                        return 'disabled';
+    if (s.state === 'unavailable') return 'unavail';
+    if (s.state === 'unknown')     return '—';
+    if (domain === 'binary_sensor' || domain === 'input_boolean') {
+      const dc = s.attributes?.device_class ?? '';
+      if (s.state === 'on') {
+        if (['occupancy', 'motion', 'presence'].includes(dc)) return 'detected';
+        if (['door', 'window', 'opening', 'contact'].includes(dc))  return 'open';
+        return 'active';
+      } else {
+        if (['occupancy', 'motion', 'presence'].includes(dc)) return 'clear';
+        if (['door', 'window', 'opening', 'contact'].includes(dc))  return 'closed';
+        return 'inactive';
+      }
+    }
+    if (domain === 'sensor') {
+      const unit = s.attributes?.unit_of_measurement ?? '';
+      return unit ? `${s.state}\u2009${unit}` : s.state;
+    }
+    return s.state;
+  }
+
+  /**
+   * Update entity state spans in-place when HA pushes state changes.
+   * Avoids tearing down/rebuilding device cards (no flicker, keeps focus).
+   */
+  _updateEntityStates(prevStates) {
+    const content = this.shadowRoot.getElementById('content');
+    if (!content) return;
+    content.querySelectorAll('[data-entity-state]').forEach(span => {
+      const eid  = span.dataset.entityState;
+      const s    = this._hass?.states?.[eid];
+      const prev = prevStates?.[eid];
+      if (s === prev) return; // no change for this entity
+      const domain     = eid.split('.')[0];
+      const isOn       = s?.state === 'on';
+      span.textContent = this._formatStateLabel(domain, s);
+      span.className   = `entity-state ${isOn ? 'on' : ''}`;
+    });
+    // Sync toggle switch positions without triggering change events
+    content.querySelectorAll('input[data-toggle-entity]').forEach(input => {
+      const s = this._hass?.states?.[input.dataset.toggleEntity];
+      if (s) input.checked = s.state === 'on';
+    });
+    // Also refresh the bridge status label (last-seen, entity counts)
+    this._updateBridgeStatus();
   }
 }
 
