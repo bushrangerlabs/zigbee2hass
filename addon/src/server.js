@@ -116,6 +116,17 @@ async function main() {
       log.warn(`[zigbee] Could not read network parameters: ${e.message}`);
     }
 
+    // Auto-open permit join for initial pairing window
+    // (herdsman keeps the network closed by default — devices cannot join without this)
+    if (config.permit_join_timeout > 0) {
+      try {
+        await zigbee.permitJoin(true, undefined, config.permit_join_timeout);
+        log.info(`[zigbee] Network open for pairing — ${config.permit_join_timeout}s (set permit_join_timeout: 0 to disable)`);
+      } catch (e) {
+        log.warn(`[zigbee] Could not open permit join: ${e.message}`);
+      }
+    }
+
     log.info('=== Zigbee2HASS ready ===');
     wsApi.broadcast('zigbee2hass/bridge/state', { state: 'online' });
 

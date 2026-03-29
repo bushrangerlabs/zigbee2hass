@@ -118,8 +118,10 @@ class ZigbeeController {
   // ── Pairing ──────────────────────────────────────────────────────────────
 
   async permitJoin(permit, device = undefined, timeout = 254) {
-    await this.herdsman.permitJoin(permit, device, timeout);
-    this.log.info(`[zigbee] Permit join: ${permit}`);
+    // herdsman v9 API: permitJoin(time: number, device?) — 0 closes, N opens for N seconds
+    const time = permit ? timeout : 0;
+    await this.herdsman.permitJoin(time, device);
+    this.log.info(`[zigbee] Permit join: ${permit} (${time}s)`);
   }
 
   // ── Device access ─────────────────────────────────────────────────────────
@@ -199,11 +201,11 @@ class ZigbeeController {
     const h = this.herdsman;
 
     h.on('deviceJoined',            (d)    => this.emit('device_joined',              this._serializeDevice(d.device)));
-    h.on('deviceInterviewStarted',  (d)    => this.emit('device_interview_started',   this._serializeDevice(d.device)));
     h.on('deviceInterview',         (d)    => {
       // Pass the raw herdsman Device so zhc.findByDevice() can match it correctly
-      if (d.status === 'successful') this.emit('device_interview_succeeded', d.device);
-      else                           this.emit('device_interview_failed',    this._serializeDevice(d.device));
+      if (d.status === 'successful')  this.emit('device_interview_succeeded', d.device);
+      else if (d.status === 'started') this.emit('device_interview_started',   this._serializeDevice(d.device));
+      else                             this.emit('device_interview_failed',    this._serializeDevice(d.device));
     });
     h.on('deviceAnnounce',          (d)    => this.emit('device_announce',            d.device));  // raw device for definition lookup
     h.on('deviceLeave',             (d)    => this.emit('device_leave',               { ieee_address: d.ieeeAddr }));
