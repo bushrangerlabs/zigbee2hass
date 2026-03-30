@@ -246,7 +246,8 @@ class ZigbeeController {
         for (const nb of (neighbors || [])) {
           const a = device.ieeeAddr;
           const b = nb.eui64;   // zigbee-herdsman v9 LQI entry uses eui64, not ieeeAddr
-          if (!a || !b || a === b) continue;
+          // Skip invalid/broadcast addresses and self-links
+          if (!a || !b || a === b || b === '0xffffffffffffffff') continue;
           const key = [a, b].sort().join('|');
           if (!linksMap.has(key) || linksMap.get(key).lqi < nb.lqi) {
             linksMap.set(key, { source: a, target: b, lqi: nb.lqi });
