@@ -1,6 +1,6 @@
 name: "Zigbee2HASS"
 description: "Reliable Zigbee for Home Assistant via zigbee-herdsman. No MQTT required."
-version: "0.1.36"
+version: "0.1.37"
 slug: "zigbee2hass"
 url: "https://github.com/bushrangerlabs/zigbee2hass"
 arch:
@@ -20,6 +20,9 @@ ports_description:
 options:
   serial_port: "/dev/ttyUSB0"
   adapter: "auto"
+  baudrate: 115200
+  rtscts: false
+  disable_led: false
   channel: 11
   pan_id: "0x1a62"
   network_key: "GENERATE"
@@ -37,7 +40,10 @@ options:
 
 schema:
   serial_port: str
-  adapter: "list(auto|zstack|deconz|ezsp|zigate)"
+  adapter: "list(auto|zstack|deconz|ezsp|ember|zigate|zboss)"
+  baudrate: int
+  rtscts: bool
+  disable_led: bool
   channel: "int(11,26)"
   pan_id: str
   network_key: str

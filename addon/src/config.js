@@ -13,6 +13,13 @@ const CONFIG_FILE = path.join(DATA_DIR, 'options.json'); // written by HA Superv
 const DEFAULTS = {
   serial_port:              '/dev/ttyUSB0',
   adapter:                  'auto',
+  // Serial / network port options
+  // For USB adapters:     serial_port: '/dev/ttyUSB0'  (or /dev/serial/by-id/...)
+  // For TCP coordinators: serial_port: 'tcp://192.168.1.100:6638'  (SLZB-06, Tube's, etc.)
+  // For mDNS discovery:   serial_port: 'mdns://slzb-06'  (adapter must support Zeroconf)
+  baudrate:                 115200,        // USB serial baud rate (ignored for TCP/mDNS)
+  rtscts:                   false,         // USB hardware flow control (ignored for TCP/mDNS)
+  disable_led:              false,         // Disable coordinator LED if supported
   channel:                  11,
   pan_id:                   '0x1a62',
   network_key:              'GENERATE',
@@ -53,4 +60,9 @@ function loadConfig() {
   return config;
 }
 
-module.exports = { loadConfig };
+/** Returns true when the port is a network address (TCP or mDNS) rather than a local serial device */
+function isNetworkPort(port) {
+  return typeof port === 'string' && (port.startsWith('tcp://') || port.startsWith('mdns://'));
+}
+
+module.exports = { loadConfig, isNetworkPort };

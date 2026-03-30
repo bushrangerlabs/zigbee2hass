@@ -3,6 +3,7 @@
 const path = require('path');
 const { Controller } = require('zigbee-herdsman');
 const { getLogger }  = require('./logger');
+const { isNetworkPort } = require('./config');
 
 /**
  * ZigbeeController wraps zigbee-herdsman's Controller.
@@ -35,11 +36,19 @@ class ZigbeeController {
     const dbPath     = path.join(this.config.data_dir, 'database.db');
     const backupPath = path.join(this.config.data_dir, 'coordinator_backup.json');
 
+    // Build serialPort config — baudrate/rtscts only apply to USB, not TCP/mDNS
+    const networkCoord = isNetworkPort(this.config.serial_port);
+    const serialPort = {
+      path:    this.config.serial_port,
+      adapter: this.config.adapter === 'auto' ? undefined : this.config.adapter,
+      ...(networkCoord ? {} : {
+        baudRate: this.config.baudrate,
+        rtscts:   this.config.rtscts,
+      }),
+    };
+
     const herdsmanConfig = {
-      serialPort: {
-        path:    this.config.serial_port,
-        adapter: this.config.adapter === 'auto' ? undefined : this.config.adapter,
-      },
+      serialPort,
       databasePath:            dbPath,
       databaseBackupPath:      dbPath + '.bak',
       backupPath:              backupPath,
@@ -47,7 +56,7 @@ class ZigbeeController {
       adapter: {
         concurrent:     16,
         delay:          0,
-        disableLED:     false,
+        disableLED:     this.config.disable_led,
         transmitPower:  this.config.transmit_power,
       },
       network: {
@@ -57,7 +66,7 @@ class ZigbeeController {
       },
     };
 
-    this.log.info('[zigbee] Starting coordinator...', { port: this.config.serial_port });
+    this.log.info(`[zigbee] Starting coordinator (${networkCoord ? 'network' : 'USB'})...`, { port: this.config.serial_port });
 
     this.herdsman = new Controller(herdsmanConfig, this.log);
     this._attachEvents();
