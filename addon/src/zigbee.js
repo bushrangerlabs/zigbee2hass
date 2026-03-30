@@ -54,8 +54,10 @@ class ZigbeeController {
       backupPath:              backupPath,
       acceptJoiningDeviceHandler: () => true,
       adapter: {
-        concurrent:     16,
-        delay:          0,
+        // TCP/Ethernet coordinators (SLZB-06, Tube's, etc.) add per-packet latency.
+        // Keep concurrent low so ZDO interview requests don't time out waiting for responses.
+        concurrent:     networkCoord ? 8 : 16,
+        delay:          networkCoord ? 60 : 0, // ms between adapter calls for TCP
         disableLED:     this.config.disable_led,
         transmitPower:  this.config.transmit_power,
       },
