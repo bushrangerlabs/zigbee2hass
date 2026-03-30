@@ -24,6 +24,9 @@ class Zigbee2HASSPanel extends HTMLElement {
       this._bridgeAvailable = false;
       this._permitJoin      = false;
       this._permitCountdown = 0;
+      this._permitJoinTotal = 254;  // full timeout for progress bar calculation
+      this._pairingDevices  = new Map(); // ieee_address → {ieee_address, model_id, friendly_name, status}
+      this._pairingUnsub    = null;  // HA event unsubscription function
       this._loading = true;
       this._error   = null;
       this._activeTab        = 'devices';
@@ -41,6 +44,8 @@ class Zigbee2HASSPanel extends HTMLElement {
 
   disconnectedCallback() {
     this._stopPolling();
+    if (this._pjTimer)    { clearInterval(this._pjTimer); this._pjTimer = null; }
+    if (this._pairingUnsub) { this._pairingUnsub(); this._pairingUnsub = null; }
   }
 
   // ── Setup ────────────────────────────────────────────────────────────────
@@ -129,33 +134,134 @@ class Zigbee2HASSPanel extends HTMLElement {
           font-size: 0.78rem;
         }
 
-        /* ── Permit join banner ── */
-        .pj-banner {
-          background: var(--primary-color, #03a9f4);
-          color: #fff;
-          border-radius: 8px;
-          padding: 12px 16px;
-          margin-bottom: 16px;
+        /* ── Pairing Modal ── */
+        .pj-modal {
+          position: fixed;
+          inset: 0;
+          z-index: 9998;
           display: flex;
           align-items: center;
+          justify-content: center;
+        }
+        .pj-modal.hidden { display: none; }
+        .pj-backdrop {
+          position: absolute;
+          inset: 0;
+          background: rgba(0,0,0,0.45);
+        }
+        .pj-dialog {
+          position: relative;
+          background: var(--card-background-color, #fff);
+          border-radius: 12px;
+          padding: 24px;
+          max-width: 480px;
+          width: calc(100% - 32px);
+          box-shadow: 0 8px 32px rgba(0,0,0,0.28);
+          display: flex;
+          flex-direction: column;
           gap: 12px;
-          font-size: 0.9rem;
-          animation: pulse-bg 1.2s infinite;
+          max-height: 85vh;
+          overflow: hidden;
         }
-        @keyframes pulse-bg {
-          0%, 100% { opacity: 1; }
-          50%       { opacity: 0.85; }
+        .pj-dialog-header {
+          display: flex;
+          align-items: center;
+          gap: 10px;
         }
-        .pj-banner .pj-icon { font-size: 1.4rem; }
-        .pj-banner .pj-text { flex: 1; }
-        .pj-banner .pj-close {
-          background: rgba(255,255,255,0.25);
-          color: #fff;
-          border: none;
-          border-radius: 4px;
-          padding: 4px 10px;
-          cursor: pointer;
-          font-size: 0.8rem;
+        .pj-dot-anim {
+          width: 10px;
+          height: 10px;
+          border-radius: 50%;
+          background: #ff9800;
+          flex-shrink: 0;
+          animation: pulse 1s infinite;
+        }
+        .pj-dot-anim.pj-dot-closed { background: #9e9e9e; animation: none; }
+        .pj-dialog-title {
+          flex: 1;
+          margin: 0;
+          font-size: 1rem;
+          font-weight: 600;
+          color: var(--primary-text-color, #212121);
+        }
+        .pj-countdown {
+          font-size: 0.85rem;
+          font-weight: 600;
+          color: var(--primary-color, #03a9f4);
+          min-width: 42px;
+          text-align: right;
+        }
+        .pj-progress-track {
+          height: 4px;
+          background: var(--divider-color, #e0e0e0);
+          border-radius: 2px;
+          overflow: hidden;
+        }
+        .pj-progress-bar {
+          height: 100%;
+          background: var(--primary-color, #03a9f4);
+          border-radius: 2px;
+          transition: width 1s linear;
+        }
+        .pj-instruction {
+          margin: 0;
+          font-size: 0.85rem;
+          color: var(--secondary-text-color, #757575);
+        }
+        .pj-device-list {
+          flex: 1;
+          overflow-y: auto;
+          min-height: 80px;
+          max-height: 280px;
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+        }
+        .pj-empty {
+          color: var(--secondary-text-color, #9e9e9e);
+          font-size: 0.85rem;
+          text-align: center;
+          padding: 24px 0;
+        }
+        .pj-device-item {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          padding: 8px 10px;
+          background: var(--secondary-background-color, #f5f5f5);
+          border-radius: 6px;
+          font-size: 0.82rem;
+        }
+        .pj-device-ieee {
+          font-family: monospace;
+          font-size: 0.75rem;
+          color: var(--secondary-text-color, #757575);
+          flex-shrink: 0;
+        }
+        .pj-device-model {
+          flex: 1;
+          font-weight: 500;
+          color: var(--primary-text-color, #212121);
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .pj-badge {
+          flex-shrink: 0;
+          padding: 2px 8px;
+          border-radius: 10px;
+          font-size: 0.72rem;
+          font-weight: 600;
+        }
+        .pj-badge-joined       { background: #fff3e0; color: #e65100; }
+        .pj-badge-interviewing { background: #e3f2fd; color: #0277bd; }
+        .pj-badge-paired       { background: #e8f5e9; color: #2e7d32; }
+        .pj-badge-failed       { background: #ffebee; color: #c62828; }
+        .pj-footer {
+          display: flex;
+          gap: 8px;
+          justify-content: flex-end;
+          flex-wrap: wrap;
         }
 
         /* ── Device grid ── */
@@ -596,13 +702,43 @@ class Zigbee2HASSPanel extends HTMLElement {
         <button class="tab-btn" data-tab="tools">🔧 Tools</button>
       </div>
 
-      <div id="pj-banner-container"></div>
+      <div id="pj-banner-container" style="display:none"></div>
       <div id="content"><div class="loading"><div class="spinner"></div>Loading devices…</div></div>
+
+      <div id="pj-modal" class="pj-modal hidden">
+        <div class="pj-backdrop" id="pj-backdrop"></div>
+        <div class="pj-dialog">
+          <div class="pj-dialog-header">
+            <span class="pj-dot-anim" id="pj-dot"></span>
+            <h2 class="pj-dialog-title" id="pj-title">Network Open for Pairing</h2>
+            <span class="pj-countdown" id="pj-countdown">254s</span>
+          </div>
+          <div class="pj-progress-track">
+            <div class="pj-progress-bar" id="pj-progress-bar" style="width:100%"></div>
+          </div>
+          <p class="pj-instruction">Power on or reset your Zigbee device. New devices will appear below.</p>
+          <div class="pj-device-list" id="pj-device-list">
+            <div class="pj-empty">Waiting for devices to join…</div>
+          </div>
+          <div class="pj-footer">
+            <button class="btn-danger  btn-sm" id="btn-pj-stop">Stop</button>
+            <button class="btn-primary btn-sm" id="btn-pj-extend">Extend</button>
+            <button class="btn-ghost   btn-sm" id="btn-pj-hide">Hide</button>
+          </div>
+        </div>
+      </div>
+
       <div class="toast" id="toast"></div>
     `;
 
     this.shadowRoot.getElementById('btn-add').addEventListener('click', () => this._openPermitJoin());
     this.shadowRoot.getElementById('btn-refresh').addEventListener('click', () => this._fullLoad());
+
+    // Pairing modal buttons
+    this.shadowRoot.getElementById('btn-pj-stop').addEventListener('click',   () => this._closePermitJoin(true));
+    this.shadowRoot.getElementById('btn-pj-hide').addEventListener('click',   () => this._closePermitJoin(false));
+    this.shadowRoot.getElementById('btn-pj-extend').addEventListener('click', () => this._extendPermitJoin());
+    this.shadowRoot.getElementById('pj-backdrop').addEventListener('click',   () => this._closePermitJoin(false));
 
     this.shadowRoot.querySelectorAll('.tab-btn').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -674,11 +810,21 @@ class Zigbee2HASSPanel extends HTMLElement {
     const btn = this.shadowRoot.getElementById('btn-add');
     btn.disabled = true;
     try {
-      await this._hass.callWS({ type: 'zigbee2hass/permit_join', permit: true, timeout: 254 });
+      this._permitJoinTotal = 254;
       this._permitCountdown = 254;
+      this._pairingDevices  = new Map();
+
+      await this._hass.callWS({ type: 'zigbee2hass/permit_join', permit: true, timeout: 254 });
       this._permitJoin = true;
-      this._renderPermitBanner();
-      this._showToast('Network open for pairing (254 s)');
+
+      // Subscribe to HA bus pairing events for live device list
+      if (this._pairingUnsub) { this._pairingUnsub(); this._pairingUnsub = null; }
+      this._pairingUnsub = await this._hass.connection.subscribeEvents(
+        (event) => this._onPairingEvent(event.data),
+        'zigbee2hass_pairing_event'
+      );
+
+      // Local countdown — keeps UI alive even if permit_join events are delayed
       if (this._pjTimer) clearInterval(this._pjTimer);
       this._pjTimer = setInterval(() => {
         this._permitCountdown = Math.max(0, this._permitCountdown - 1);
@@ -687,8 +833,10 @@ class Zigbee2HASSPanel extends HTMLElement {
           clearInterval(this._pjTimer);
           this._pjTimer = null;
         }
-        this._renderPermitBanner();
+        this._updatePairingModal();
       }, 1000);
+
+      this._showPairingModal();
     } catch (err) {
       this._showToast('Failed to open network: ' + (err.message ?? err));
     } finally {
@@ -696,36 +844,145 @@ class Zigbee2HASSPanel extends HTMLElement {
     }
   }
 
-  async _closePermitJoin() {
+  async _extendPermitJoin() {
     try {
-      await this._hass.callWS({ type: 'zigbee2hass/permit_join', permit: false });
-      this._permitJoin = false;
-      this._permitCountdown = 0;
-      if (this._pjTimer) { clearInterval(this._pjTimer); this._pjTimer = null; }
-      this._renderPermitBanner();
+      await this._hass.callWS({ type: 'zigbee2hass/permit_join', permit: true, timeout: 254 });
+      this._permitJoinTotal = 254;
+      this._permitCountdown = 254;
+      this._permitJoin = true;
+      if (this._pjTimer) clearInterval(this._pjTimer);
+      this._pjTimer = setInterval(() => {
+        this._permitCountdown = Math.max(0, this._permitCountdown - 1);
+        if (this._permitCountdown === 0) {
+          this._permitJoin = false;
+          clearInterval(this._pjTimer);
+          this._pjTimer = null;
+        }
+        this._updatePairingModal();
+      }, 1000);
+      this._updatePairingModal();
     } catch (err) {
-      this._showToast('Failed to close network: ' + (err.message ?? err));
+      this._showToast('Failed to extend: ' + (err.message ?? err));
     }
   }
 
-  _renderPermitBanner() {
-    const container = this.shadowRoot.getElementById('pj-banner-container');
-    if (!this._permitJoin) {
-      container.innerHTML = '';
+  async _closePermitJoin(stopNetwork = true) {
+    if (this._pjTimer)    { clearInterval(this._pjTimer); this._pjTimer = null; }
+    if (this._pairingUnsub) { this._pairingUnsub(); this._pairingUnsub = null; }
+    this._hidePairingModal();
+    if (stopNetwork) {
+      try {
+        await this._hass.callWS({ type: 'zigbee2hass/permit_join', permit: false });
+      } catch (err) {
+        this._showToast('Failed to close network: ' + (err.message ?? err));
+      }
+      this._permitJoin = false;
+      this._permitCountdown = 0;
+    }
+    // Refresh device list — newly paired devices will now appear
+    await this._fullLoad();
+  }
+
+  // ── Pairing modal ─────────────────────────────────────────────────────────
+
+  _showPairingModal() {
+    const modal = this.shadowRoot.getElementById('pj-modal');
+    if (modal) modal.classList.remove('hidden');
+    this._updatePairingModal();
+  }
+
+  _hidePairingModal() {
+    const modal = this.shadowRoot.getElementById('pj-modal');
+    if (modal) modal.classList.add('hidden');
+  }
+
+  _onPairingEvent(data) {
+    const { type, ieee_address, model_id, friendly_name, status, permit, remaining } = data;
+
+    if (type === 'joined') {
+      this._pairingDevices.set(ieee_address, {
+        ieee_address,
+        model_id:      model_id || null,
+        friendly_name: friendly_name || null,
+        status: 'joined',
+      });
+    } else if (type === 'interview') {
+      const d = this._pairingDevices.get(ieee_address) || { ieee_address, model_id: model_id || null, friendly_name: null };
+      d.status = status === 'started' ? 'interviewing' : 'failed';
+      if (model_id) d.model_id = model_id;
+      this._pairingDevices.set(ieee_address, d);
+    } else if (type === 'ready') {
+      const d = this._pairingDevices.get(ieee_address) || { ieee_address, model_id: model_id || null, friendly_name: friendly_name || null };
+      d.status = 'paired';
+      if (model_id)      d.model_id      = model_id;
+      if (friendly_name) d.friendly_name = friendly_name;
+      this._pairingDevices.set(ieee_address, d);
+    } else if (type === 'permit_join') {
+      this._permitJoin = permit;
+      // Server reports remaining seconds via 'remaining' (or ZHC raw 'timeout')
+      if (typeof remaining === 'number' && remaining >= 0) {
+        this._permitCountdown = remaining;
+        // Keep total accurate for progress bar (only on first grant)
+        if (permit && remaining > this._permitCountdown) this._permitJoinTotal = remaining;
+      }
+      if (!permit) {
+        if (this._pjTimer) { clearInterval(this._pjTimer); this._pjTimer = null; }
+      }
+    }
+
+    this._updatePairingModal();
+  }
+
+  _updatePairingModal() {
+    const modal = this.shadowRoot.getElementById('pj-modal');
+    if (!modal || modal.classList.contains('hidden')) return;
+
+    // Dot + title
+    const dot   = modal.querySelector('#pj-dot');
+    const title = modal.querySelector('#pj-title');
+    if (dot)   dot.classList.toggle('pj-dot-closed', !this._permitJoin);
+    if (title) title.textContent = this._permitJoin ? 'Network Open for Pairing' : 'Network Closed';
+
+    // Countdown label
+    const cd = modal.querySelector('#pj-countdown');
+    if (cd) cd.textContent = this._permitJoin ? `${this._permitCountdown}s` : 'closed';
+
+    // Progress bar
+    const bar = modal.querySelector('#pj-progress-bar');
+    if (bar) {
+      const pct = this._permitJoin && this._permitJoinTotal > 0
+        ? Math.max(0, (this._permitCountdown / this._permitJoinTotal) * 100)
+        : 0;
+      bar.style.width = `${pct}%`;
+    }
+
+    // Device list
+    const list = modal.querySelector('#pj-device-list');
+    if (!list) return;
+    if (this._pairingDevices.size === 0) {
+      list.innerHTML = '<div class="pj-empty">Waiting for devices to join…</div>';
       return;
     }
-    container.innerHTML = `
-      <div class="pj-banner">
-        <span class="pj-icon">📡</span>
-        <span class="pj-text">
-          <strong>Network open for pairing</strong> — power on or reset your device now.
-          Closes in <strong>${this._permitCountdown}s</strong>.
-        </span>
-        <button class="pj-close" id="btn-pj-close">Close</button>
-      </div>
-    `;
-    container.querySelector('#btn-pj-close').addEventListener('click', () => this._closePermitJoin());
+    const badgeMap = {
+      joined:       { cls: 'pj-badge-joined',       label: 'Joining…' },
+      interviewing: { cls: 'pj-badge-interviewing',  label: 'Interviewing…' },
+      paired:       { cls: 'pj-badge-paired',        label: '✓ Paired' },
+      failed:       { cls: 'pj-badge-failed',        label: '✗ Failed' },
+    };
+    list.innerHTML = [...this._pairingDevices.values()].map(d => {
+      const badge = badgeMap[d.status] || badgeMap.joined;
+      const name  = d.friendly_name || d.model_id || 'Unknown device';
+      const ieee  = d.ieee_address ? `…${this._escHtml(d.ieee_address.slice(-8))}` : '?';
+      return `
+        <div class="pj-device-item">
+          <span class="pj-device-ieee">${ieee}</span>
+          <span class="pj-device-model">${this._escHtml(name)}</span>
+          <span class="pj-badge ${badge.cls}">${badge.label}</span>
+        </div>`;
+    }).join('');
   }
+
+  _renderPermitBanner() { /* no-op — replaced by _updatePairingModal */ }
 
   // ── Rendering ─────────────────────────────────────────────────────────────
 

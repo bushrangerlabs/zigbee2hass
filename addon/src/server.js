@@ -58,9 +58,11 @@ async function main() {
   });
   on('device_interview_started', (device) => {
     log.info(`[zigbee] Interview started: ${device.ieee_address} (${device.model_id || 'unknown'})`);
+    wsApi.broadcast('zigbee2hass/device/interview', { ieee_address: device.ieee_address, model_id: device.model_id ?? null, status: 'started' });
   });
   on('device_interview_failed', (device) => {
     log.warn(`[zigbee] Interview FAILED: ${device.ieee_address} (${device.model_id || 'unknown'}) — device may be too far away or incompatible`);
+    wsApi.broadcast('zigbee2hass/device/interview', { ieee_address: device.ieee_address, model_id: device.model_id ?? null, status: 'failed' });
   });
   on('device_joined', (device) => {
     log.info(`[zigbee] Device joined network: ${device.ieee_address}`);

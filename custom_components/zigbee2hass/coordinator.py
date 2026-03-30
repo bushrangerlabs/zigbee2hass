@@ -23,6 +23,8 @@ from .const import (
     TOPIC_BRIDGE_DEVICES,
     TOPIC_BRIDGE_STATE,
     TOPIC_DEVICE_AVAIL,
+    TOPIC_DEVICE_INTERVIEW,
+    TOPIC_DEVICE_JOINED,
     TOPIC_DEVICE_LEFT,
     TOPIC_DEVICE_READY,
     TOPIC_DEVICE_RENAMED,
@@ -230,8 +232,40 @@ class Zigbee2HASSCoordinator:
                     "ieee_address": ieee,
                 })
 
+        elif topic == TOPIC_DEVICE_JOINED:
+            # ieee may be 'ieee_address' (serialised) or 'ieeeAddr' (raw ZHC v9)
+            ieee = payload.get("ieee_address") or payload.get("ieeeAddr")
+            if ieee:
+                self.hass.bus.fire(f"{DOMAIN}_pairing_event", {
+                    "type":         "joined",
+                    "ieee_address": ieee,
+                    "model_id":     payload.get("model_id"),
+                    "entry_id":     self.entry.entry_id,
+                })
+
+        elif topic == TOPIC_DEVICE_INTERVIEW:
+            ieee   = payload.get("ieee_address")
+            status = payload.get("status")
+            if ieee and status:
+                self.hass.bus.fire(f"{DOMAIN}_pairing_event", {
+                    "type":         "interview",
+                    "ieee_address": ieee,
+                    "model_id":     payload.get("model_id"),
+                    "status":       status,
+                    "entry_id":     self.entry.entry_id,
+                })
+
         elif topic == TOPIC_PERMIT_JOIN:
-            self.permit_join = payload.get("permit", False)
+            # ZHC emits 'permitted' in v9; older versions used 'permit'
+            self.permit_join = payload.get("permit", payload.get("permitted", False))
+            # Remaining time: ZHC calls it 'timeout'
+            remaining = payload.get("timeout", payload.get("remaining", 0))
+            self.hass.bus.fire(f"{DOMAIN}_pairing_event", {
+                "type":      "permit_join",
+                "permit":    self.permit_join,
+                "remaining": remaining,
+                "entry_id":  self.entry.entry_id,
+            })
 
         # Dispatch to topic subscribers
         for fn in self._subscribers.get(topic, []):
@@ -357,6 +391,14 @@ class Zigbee2HASSCoordinator:
         self.hass.bus.fire(f"{DOMAIN}_device_ready", {
             "entry_id":   self.entry.entry_id,
             "ieee_address": ieee,
+        })
+        # Also fire a pairing event so the panel modal can update its device list
+        self.hass.bus.fire(f"{DOMAIN}_pairing_event", {
+            "type":         "ready",
+            "ieee_address": ieee,
+            "model_id":     device.get("model_id"),
+            "friendly_name": device.get("friendly_name"),
+            "entry_id":     self.entry.entry_id,
         })
 
     def _dispatch_device(self, ieee_address: str) -> None:
