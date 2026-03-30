@@ -147,7 +147,8 @@ class Zigbee2HASSCoordinator:
         return await self._client.request("configure_device", {"ieee_address": ieee_address})
 
     async def async_get_network_map(self) -> dict:
-        return await self._client.request("get_network_map")
+        # LQI scans are sequential (up to 5 s per device); allow plenty of time
+        return await self._client.request("get_network_map", timeout=120.0)
 
     async def async_get_groups(self) -> dict:
         return await self._client.request("get_groups")

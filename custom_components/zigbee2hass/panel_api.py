@@ -198,7 +198,11 @@ async def ws_get_network_map(
     coordinator = _get_coordinator(hass, connection, msg["id"])
     if not coordinator:
         return
-    result = await coordinator.async_get_network_map()
+    try:
+        result = await coordinator.async_get_network_map()
+    except Exception as err:  # noqa: BLE001
+        connection.send_error(msg["id"], "get_network_map_failed", str(err))
+        return
     connection.send_result(msg["id"], result)
 
 
