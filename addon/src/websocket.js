@@ -195,11 +195,11 @@ class WebSocketAPI {
         }
 
         case 'remove_device': {
-          const { ieee_address } = payload;
-          await this.zigbee.removeDevice(ieee_address);
+          const { ieee_address, force = false } = payload;
+          await this.zigbee.removeDevice(ieee_address, force);
           this.devices.onDeviceLeave(ieee_address);
           this.broadcast('zigbee2hass/device/left', { ieee_address });
-          reply({ ieee_address, removed: true });
+          reply({ ieee_address, removed: true, force });
           break;
         }
 

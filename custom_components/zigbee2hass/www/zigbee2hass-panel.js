@@ -405,6 +405,76 @@ class Zigbee2HASSPanel extends HTMLElement {
           to { transform: rotate(360deg); }
         }
 
+        /* ── Remove device modal ── */
+        .rm-overlay {
+          position: fixed;
+          inset: 0;
+          background: rgba(0,0,0,0.5);
+          z-index: 10000;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+        .rm-dialog {
+          background: var(--card-background-color, #fff);
+          border-radius: 12px;
+          padding: 24px;
+          max-width: 420px;
+          width: calc(100% - 32px);
+          box-shadow: 0 8px 32px rgba(0,0,0,0.28);
+        }
+        .rm-title {
+          font-size: 1.05rem;
+          font-weight: 600;
+          margin: 0 0 4px;
+        }
+        .rm-device-name {
+          font-size: 0.9rem;
+          margin: 0 0 2px;
+        }
+        .rm-device-ieee {
+          font-family: monospace;
+          font-size: 0.78rem;
+          color: var(--secondary-text-color, #757575);
+          margin: 0 0 16px;
+        }
+        .rm-option {
+          border: 1px solid var(--divider-color, #e0e0e0);
+          border-radius: 8px;
+          padding: 12px 14px;
+          margin-bottom: 10px;
+          cursor: default;
+        }
+        .rm-option-title {
+          font-weight: 600;
+          font-size: 0.88rem;
+          margin-bottom: 4px;
+        }
+        .rm-option-desc {
+          font-size: 0.8rem;
+          color: var(--secondary-text-color, #757575);
+          line-height: 1.4;
+        }
+        .rm-footer {
+          display: flex;
+          gap: 8px;
+          justify-content: flex-end;
+          margin-top: 20px;
+          flex-wrap: wrap;
+        }
+        .btn-force-remove {
+          background: #b71c1c;
+          color: #fff;
+          border: none;
+          border-radius: 4px;
+          padding: 8px 14px;
+          font-size: 0.85rem;
+          font-weight: 500;
+          cursor: pointer;
+          transition: filter 0.15s;
+        }
+        .btn-force-remove:hover { filter: brightness(1.1); }
+
         /* ── Toast ── */
         .toast {
           position: fixed;
@@ -952,14 +1022,54 @@ class Zigbee2HASSPanel extends HTMLElement {
   }
 
   async _removeDevice(ieee) {
-    if (!confirm(`Remove device ${ieee} from the Zigbee network?`)) return;
+    const dev  = this._devices.find(d => d.ieee_address === ieee);
+    const name = dev?.friendly_name ?? dev?.model_id ?? ieee;
+    const choice = await this._showRemoveDeviceDialog(ieee, name);
+    if (!choice) return;
     try {
-      await this._hass.callWS({ type: 'zigbee2hass/remove_device', ieee_address: ieee });
-      this._showToast('Device removed');
+      await this._hass.callWS({
+        type:         'zigbee2hass/remove_device',
+        ieee_address: ieee,
+        force:        choice === 'force',
+      });
+      this._showToast(choice === 'force' ? 'Device force-removed from database' : 'Device removed');
       await this._fullLoad();
     } catch (err) {
       this._showToast('Remove failed: ' + (err.message ?? err));
     }
+  }
+
+  /** Show a two-option remove dialog; resolves to 'normal', 'force', or null (cancel). */
+  _showRemoveDeviceDialog(ieee, name) {
+    return new Promise(resolve => {
+      const overlay = document.createElement('div');
+      overlay.className = 'rm-overlay';
+      overlay.innerHTML = `
+        <div class="rm-dialog">
+          <p class="rm-title">Remove Device</p>
+          <p class="rm-device-name">${this._escHtml(name)}</p>
+          <p class="rm-device-ieee">${this._escHtml(ieee)}</p>
+          <div class="rm-option">
+            <div class="rm-option-title">Remove</div>
+            <div class="rm-option-desc">Sends a leave request to the device, then removes it from the network. Use this when the device is still reachable.</div>
+          </div>
+          <div class="rm-option">
+            <div class="rm-option-title" style="color:#b71c1c">Force Remove</div>
+            <div class="rm-option-desc">Removes the device from the database immediately without contacting it. Use when the device is offline, broken, or already replaced by another coordinator.</div>
+          </div>
+          <div class="rm-footer">
+            <button class="btn-ghost" id="rm-cancel">Cancel</button>
+            <button class="btn-danger" id="rm-normal">Remove</button>
+            <button class="btn-force-remove" id="rm-force">Force Remove</button>
+          </div>
+        </div>`;
+      this.shadowRoot.appendChild(overlay);
+      const done = r => { overlay.remove(); resolve(r); };
+      overlay.querySelector('#rm-cancel').onclick = () => done(null);
+      overlay.querySelector('#rm-normal').onclick = () => done('normal');
+      overlay.querySelector('#rm-force').onclick  = () => done('force');
+      overlay.addEventListener('click', e => { if (e.target === overlay) done(null); });
+    });
   }
 
   _startRename(ieee) {

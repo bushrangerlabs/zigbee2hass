@@ -134,8 +134,8 @@ class Zigbee2HASSCoordinator:
     async def async_get_health(self) -> dict:
         return await self._client.request("health")
 
-    async def async_remove_device(self, ieee_address: str) -> None:
-        await self._client.request("remove_device", {"ieee_address": ieee_address})
+    async def async_remove_device(self, ieee_address: str, force: bool = False) -> None:
+        await self._client.request("remove_device", {"ieee_address": ieee_address, "force": force})
 
     async def async_rename_device(self, ieee_address: str, name: str) -> None:
         result = await self._client.request("rename_device", {"ieee_address": ieee_address, "name": name})

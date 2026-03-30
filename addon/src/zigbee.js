@@ -191,17 +191,24 @@ class ZigbeeController {
 
   /**
    * Remove a device from the Zigbee network and from the herdsman database.
-   * A leave request is sent first (best-effort); the device is always removed
-   * from the DB even if the radio command fails (e.g. device is offline).
+   *
+   * @param {string}  ieeeAddress - IEEE address of the device to remove
+   * @param {boolean} force       - When true, skip the over-the-air leave
+   *                                request and remove only from the database.
+   *                                Use when the device is unreachable/replaced.
    */
-  async removeDevice(ieeeAddress) {
+  async removeDevice(ieeeAddress, force = false) {
     if (!this.herdsman) throw new Error('Coordinator not started');
     const device = this.herdsman.getDeviceByIeeeAddr(ieeeAddress);
     if (!device) throw new Error(`Device not found: ${ieeeAddress}`);
-    try {
-      await device.removeFromNetwork();
-    } catch (err) {
-      this.log.warn(`[zigbee] removeFromNetwork failed for ${ieeeAddress}: ${err.message} — removing from DB anyway`);
+    if (force) {
+      this.log.info(`[zigbee] Force-removing device (skip leave request): ${ieeeAddress}`);
+    } else {
+      try {
+        await device.removeFromNetwork();
+      } catch (err) {
+        this.log.warn(`[zigbee] removeFromNetwork failed for ${ieeeAddress}: ${err.message} — removing from DB anyway`);
+      }
     }
     await device.removeFromDatabase();
     this.log.info(`[zigbee] Device removed: ${ieeeAddress}`);

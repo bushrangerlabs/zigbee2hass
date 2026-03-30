@@ -111,6 +111,7 @@ async def ws_permit_join(
 @websocket_api.websocket_command({
     "type": "zigbee2hass/remove_device",
     vol.Required("ieee_address"): str,
+    vol.Optional("force", default=False): bool,
 })
 @websocket_api.require_admin
 @websocket_api.async_response
@@ -122,7 +123,7 @@ async def ws_remove_device(
     coordinator = _get_coordinator(hass, connection, msg["id"])
     if not coordinator:
         return
-    await coordinator.async_remove_device(msg["ieee_address"])
+    await coordinator.async_remove_device(msg["ieee_address"], force=msg.get("force", False))
     connection.send_result(msg["id"], {"removed": True})
 
 
