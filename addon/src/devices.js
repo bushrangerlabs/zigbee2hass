@@ -140,7 +140,10 @@ class DeviceManager {
     // null here, the lazy-resolution path in onMessage can still fire it later.
     if (definition) this._deviceReadyEmitted.add(ieee);
     this.emit('device_ready', {
-      device: this.zigbee.serializeDevice(rawDevice),
+      device: {
+        ...this.zigbee.serializeDevice(rawDevice),
+        friendly_name: definition?.model ?? rawDevice.modelID ?? rawDevice.ieeeAddr,
+      },
       definition: definition ? this._serializeDefinition(definition, rawDevice) : null,
     });
   }
@@ -166,7 +169,10 @@ class DeviceManager {
 
     if (definition) this._deviceReadyEmitted.add(ieee);
     this.emit('device_ready', {
-      device: this.zigbee.serializeDevice(rawDevice),
+      device: {
+        ...this.zigbee.serializeDevice(rawDevice),
+        friendly_name: definition?.model ?? rawDevice.modelID ?? rawDevice.ieeeAddr,
+      },
       definition: definition ? this._serializeDefinition(definition, rawDevice) : null,
     });
   }
@@ -530,11 +536,22 @@ class DeviceManager {
     } else {
       exposes = def.exposes ?? [];
     }
+    // Deduplicate exposes — some ZHC v25 definitions (especially with
+    // multi-endpoint devices or function-style exposes) can return the same
+    // property multiple times, causing duplicate HA entities.
+    const seen = new Set();
+    const uniqueExposes = exposes.filter(e => {
+      const key = `${e.name ?? e.type ?? ''}:${e.property ?? ''}:${e.endpoint ?? ''}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
     return {
       model:        def.model        ?? null,
       vendor:       def.vendor       ?? null,
       description:  def.description  ?? null,
-      exposes,
+      exposes:      uniqueExposes,
       supports_ota: !!def.ota,
     };
   }

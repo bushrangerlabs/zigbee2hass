@@ -66,7 +66,7 @@ async def ws_get_devices(
         available = data.get("available", False)
         devices.append({
             "ieee_address":       ieee,
-            "friendly_name":      device.get("friendly_name") or device.get("model_id") or ieee,
+            "friendly_name":      device.get("friendly_name") or definition.get("model") or device.get("model_id") or ieee,
             "model_id":           device.get("model_id"),
             "manufacturer":       device.get("manufacturer"),
             "type":               device.get("type"),

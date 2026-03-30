@@ -148,7 +148,7 @@ class WebSocketAPI {
       this._send(ws, 'zigbee2hass/bridge/devices', {
         devices: devices.map(d => ({
           ...d,
-          friendly_name: this.devices.getFriendlyName(d.ieee_address) ?? d.model_id ?? d.ieee_address,
+          friendly_name: this.devices.getFriendlyName(d.ieee_address) ?? definitions[d.ieee_address]?.model ?? d.model_id ?? d.ieee_address,
           definition:    definitions[d.ieee_address] ?? null,
           image_url:     _deviceImageUrl(definitions[d.ieee_address]),
           state:         allStates[d.ieee_address] ?? {},
@@ -177,7 +177,7 @@ class WebSocketAPI {
           const allStates   = this.devices.getAllStates();
           reply(devices.map(d => ({
             ...d,
-            friendly_name: this.devices.getFriendlyName(d.ieee_address) ?? d.model_id ?? d.ieee_address,
+            friendly_name: this.devices.getFriendlyName(d.ieee_address) ?? definitions[d.ieee_address]?.model ?? d.model_id ?? d.ieee_address,
             definition:    definitions[d.ieee_address] ?? null,
             image_url:     _deviceImageUrl(definitions[d.ieee_address]),
             state:         allStates[d.ieee_address] ?? {},
