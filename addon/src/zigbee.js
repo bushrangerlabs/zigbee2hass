@@ -242,8 +242,9 @@ class ZigbeeController {
   // ── Network map (LQI scan) ────────────────────────────────────────────────
 
   async getNetworkMap() {
-    const devices = this.herdsman.getDevices();
-    const nodes   = [];
+    const devices  = this.herdsman.getDevices();
+    const nodes    = [];
+    const nodeIeee = new Set(); // known IEEE addresses — used to filter phantom neighbors
     const linksMap = new Map(); // sorted "A-B" key => { source, target, lqi }
 
     for (const device of devices) {
@@ -253,7 +254,10 @@ class ZigbeeController {
         model: device.modelID,
         nwk:   device.networkAddress,
       });
+      nodeIeee.add(device.ieeeAddr);
+    }
 
+    for (const device of devices) {
       try {
         const neighbors = await Promise.race([
           device.lqi(),
@@ -262,8 +266,11 @@ class ZigbeeController {
         for (const nb of (neighbors || [])) {
           const a = device.ieeeAddr;
           const b = nb.eui64;   // zigbee-herdsman v9 LQI entry uses eui64, not ieeeAddr
-          // Skip invalid/broadcast addresses and self-links
-          if (!a || !b || a === b || b === '0xffffffffffffffff') continue;
+          // Skip self-links, broadcast placeholders, or any address not in our
+          // known node set (e.g. stale neighbors from a previous network that
+          // the coordinator still has cached in its LQI table).
+          if (!a || !b || a === b) continue;
+          if (!nodeIeee.has(a) || !nodeIeee.has(b)) continue;
           const key = [a, b].sort().join('|');
           if (!linksMap.has(key) || linksMap.get(key).lqi < nb.lqi) {
             linksMap.set(key, { source: a, target: b, lqi: nb.lqi });
