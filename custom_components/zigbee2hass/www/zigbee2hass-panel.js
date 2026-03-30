@@ -457,16 +457,20 @@ class Zigbee2HASSPanel extends HTMLElement {
           padding: 16px;
           overflow: hidden;
         }
-        .map-wrap svg { display: block; width: 100%; touch-action: none; }
-        .map-node circle { cursor: pointer; }
-        .map-node text { font-size: 11px; fill: var(--primary-text-color,#212121); pointer-events: none; }
-        .map-link { stroke: #bbb; stroke-opacity: 0.8; }
-        .map-link.strong { stroke: #4caf50; }
-        .map-link.medium { stroke: #ff9800; }
-        .map-link.weak   { stroke: #f44336; }
+        .map-wrap svg { display: block; width: 100%; touch-action: none; cursor: grab; }
+        .map-wrap svg:active { cursor: grabbing; }
+        .map-node circle { cursor: grab; }
+        .map-node circle:active { cursor: grabbing; }
+        .map-node text { font-size: 11px; fill: var(--primary-text-color,#212121); pointer-events: none; user-select: none; }
+        .map-link { stroke: #bbb; stroke-opacity: 0.7; fill: none; }
+        .map-link.strong { stroke: #4caf50; stroke-opacity: 0.85; }
+        .map-link.medium { stroke: #ff9800; stroke-opacity: 0.85; }
+        .map-link.weak   { stroke: #f44336; stroke-opacity: 0.85; }
         .map-legend { display:flex; gap:16px; flex-wrap:wrap; margin-top:10px; font-size:0.78rem; color:var(--secondary-text-color,#757575); }
-        .map-legend span::before { content:'—'; font-weight:700; margin-right:4px; }
-        .map-legend .l-strong::before { color:#4caf50; } .map-legend .l-medium::before { color:#ff9800; } .map-legend .l-weak::before { color:#f44336; }
+        .map-legend span { display:flex; align-items:center; gap:4px; }
+        .map-legend .dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; }
+        .map-legend .dash { width:18px; height:3px; border-radius:2px; flex-shrink:0; }
+        .map-hint { font-size:0.72rem; color:var(--secondary-text-color,#9e9e9e); margin-top:6px; }
 
         /* ── Groups ── */
         .groups-layout { display: grid; grid-template-columns: 260px 1fr; gap: 16px; align-items: start; }
@@ -1045,54 +1049,120 @@ class Zigbee2HASSPanel extends HTMLElement {
 
   // ── Network Map ─────────────────────────────────────────────────────────────
 
+  async _loadD3() {
+    if (window._z2hD3) return window._z2hD3;
+    window._z2hD3 = await import('https://cdn.jsdelivr.net/npm/d3@7/+esm');
+    return window._z2hD3;
+  }
+
   async _renderNetworkMap() {
     const content = this.shadowRoot.getElementById('content');
-    content.innerHTML = `<div class="map-wrap"><div class="loading"><div class="spinner"></div>Scanning network…</div></div>`;
+    content.innerHTML = `<div class="map-wrap"><div class="loading"><div class="spinner"></div>Scanning network… (this may take up to 2 minutes on large networks)</div></div>`;
     try {
-      const map = await this._hass.callWS({ type: 'zigbee2hass/get_network_map' });
-      this._drawNetworkMap(content, map);
+      const [map, d3] = await Promise.all([
+        this._hass.callWS({ type: 'zigbee2hass/get_network_map' }),
+        this._loadD3(),
+      ]);
+      this._drawNetworkMap(content, map, d3);
     } catch (err) {
       content.innerHTML = `<div class="error-msg">⚠ Network map failed: ${this._escHtml(err.message ?? String(err))}</div>`;
     }
   }
 
-  _drawNetworkMap(content, map) {
-    const { nodes = [], links = [] } = map;
-    const W = 700, H = 500, R = 14;
-    // Assign positions: coordinator at center, others in circle
-    const devNodes = nodes.filter(n => n.type !== 'Coordinator');
-    const coordNode = nodes.find(n => n.type === 'Coordinator');
-    const positions = new Map();
-    if (coordNode) positions.set(coordNode.ieee, { x: W/2, y: H/2, node: coordNode });
-    devNodes.forEach((n, i) => {
-      const angle = (2 * Math.PI * i) / devNodes.length - Math.PI / 2;
-      const r = Math.min(W, H) * 0.38;
-      positions.set(n.ieee, { x: W/2 + r * Math.cos(angle), y: H/2 + r * Math.sin(angle), node: n });
-    });
-    const linkSvg = links.map(l => {
-      const a = positions.get(l.source), b = positions.get(l.target);
-      if (!a || !b) return '';
-      const cls = l.lqi >= 170 ? 'strong' : l.lqi >= 85 ? 'medium' : 'weak';
-      return `<line class="map-link ${cls}" x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke-width="${l.lqi >= 170 ? 2 : 1}"><title>LQI ${l.lqi}</title></line>`;
-    }).join('');
-    const nodeSvg = Array.from(positions.values()).map(({ x, y, node }) => {
-      const isCoord = node.type === 'Coordinator';
-      const label   = this._escHtml((node.model ?? node.ieee ?? '').slice(0, 14));
-      const fill    = isCoord ? '#03a9f4' : (node.type === 'Router' ? '#4caf50' : '#ff9800');
-      return `<g class="map-node"><circle cx="${x}" cy="${y}" r="${isCoord ? R+4 : R}" fill="${fill}" fill-opacity="0.85" stroke="#fff" stroke-width="2"/><text x="${x}" y="${y + R + 13}" text-anchor="middle">${label}</text></g>`;
-    }).join('');
+  _drawNetworkMap(content, map, d3) {
+    const { nodes: rawNodes = [], links: rawLinks = [] } = map;
+    const W = 860, H = 580, R = 16;
+
+    // Deep-copy so D3 simulation can mutate objects freely
+    const nodes = rawNodes.map(n => ({ ...n, id: n.ieee }));
+    const links = rawLinks.map(l => ({ source: l.source, target: l.target, lqi: l.lqi }));
+
     content.innerHTML = `
       <div class="map-wrap">
-        <svg viewBox="0 0 ${W} ${H}" style="height:${H}px">${linkSvg}${nodeSvg}</svg>
+        <svg id="map-svg" viewBox="0 0 ${W} ${H}" style="height:${H}px">
+          <g id="map-root"></g>
+        </svg>
         <div class="map-legend">
-          <span>🔵 Coordinator &nbsp; 🟢 Router &nbsp; 🟠 End device</span>
-          <span class="l-strong">Strong (&ge;170)</span>
-          <span class="l-medium">Medium (&ge;85)</span>
-          <span class="l-weak">Weak (&lt;85)</span>
+          <span><span class="dot" style="background:#03a9f4"></span>Coordinator</span>
+          <span><span class="dot" style="background:#4caf50"></span>Router</span>
+          <span><span class="dot" style="background:#ff9800"></span>End device</span>
+          <span><span class="dash" style="background:#4caf50"></span>Strong (&ge;170)</span>
+          <span><span class="dash" style="background:#ff9800"></span>Medium (&ge;85)</span>
+          <span><span class="dash" style="background:#f44336"></span>Weak (&lt;85)</span>
         </div>
-        <div style="margin-top:12px"><button class="btn-ghost btn-sm" id="btn-map-refresh">↺ Rescan</button></div>
+        <div class="map-hint">Drag nodes to reposition &bull; Scroll/pinch to zoom &bull; Drag background to pan</div>
+        <div style="margin-top:10px"><button class="btn-ghost btn-sm" id="btn-map-refresh">↺ Rescan</button></div>
       </div>`;
+
     content.querySelector('#btn-map-refresh')?.addEventListener('click', () => this._renderNetworkMap());
+
+    const svgEl  = this.shadowRoot.getElementById('map-svg');
+    const rootEl = this.shadowRoot.getElementById('map-root');
+    if (!svgEl || !rootEl) return;
+
+    const svg  = d3.select(svgEl);
+    const root = d3.select(rootEl);
+
+    // ── Zoom / pan ──────────────────────────────────────────────────────────
+    svg.call(
+      d3.zoom()
+        .scaleExtent([0.2, 6])
+        .on('zoom', ev => root.attr('transform', ev.transform))
+    );
+
+    // ── Force simulation ───────────────────────────────────────────────────
+    const sim = d3.forceSimulation(nodes)
+      .force('link',    d3.forceLink(links).id(d => d.id).distance(120).strength(0.5))
+      .force('charge',  d3.forceManyBody().strength(-340))
+      .force('center',  d3.forceCenter(W / 2, H / 2))
+      .force('collide', d3.forceCollide((d) => (d.type === 'Coordinator' ? R + 6 : R) + 4));
+
+    // ── Links ──────────────────────────────────────────────────────────────
+    const linkSel = root.append('g')
+      .selectAll('line')
+      .data(links)
+      .join('line')
+        .attr('class', d => 'map-link ' + (d.lqi >= 170 ? 'strong' : d.lqi >= 85 ? 'medium' : 'weak'))
+        .attr('stroke-width', d => d.lqi >= 170 ? 2.5 : 1.5)
+        .each(function(d) { d3.select(this).append('title').text(`LQI: ${d.lqi}`); });
+
+    // ── Nodes ──────────────────────────────────────────────────────────────
+    const drag = d3.drag()
+      .on('start', (ev, d) => { if (!ev.active) sim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+      .on('drag',  (ev, d) => { d.fx = ev.x; d.fy = ev.y; })
+      .on('end',   (ev, d) => { if (!ev.active) sim.alphaTarget(0); d.fx = null; d.fy = null; });
+
+    const nodeSel = root.append('g')
+      .selectAll('g')
+      .data(nodes)
+      .join('g')
+        .attr('class', 'map-node')
+        .call(drag);
+
+    nodeSel.append('circle')
+      .attr('r',            d => d.type === 'Coordinator' ? R + 4 : R)
+      .attr('fill',         d => d.type === 'Coordinator' ? '#03a9f4' : d.type === 'Router' ? '#4caf50' : '#ff9800')
+      .attr('fill-opacity', 0.88)
+      .attr('stroke',       '#fff')
+      .attr('stroke-width', 2.5);
+
+    nodeSel.append('text')
+      .attr('dy',           d => (d.type === 'Coordinator' ? R + 4 : R) + 14)
+      .attr('text-anchor',  'middle')
+      .text(d => (d.model ?? d.ieee ?? '').slice(0, 16));
+
+    nodeSel.append('title')
+      .text(d => [d.model, d.type, d.ieee].filter(Boolean).join('\n'));
+
+    // ── Tick ───────────────────────────────────────────────────────────────
+    sim.on('tick', () => {
+      linkSel
+        .attr('x1', d => d.source.x)
+        .attr('y1', d => d.source.y)
+        .attr('x2', d => d.target.x)
+        .attr('y2', d => d.target.y);
+      nodeSel.attr('transform', d => `translate(${d.x},${d.y})`);
+    });
   }
 
   // ── Groups ────────────────────────────────────────────────────────────────
