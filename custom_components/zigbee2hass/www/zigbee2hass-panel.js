@@ -1278,7 +1278,7 @@ class Zigbee2HASSPanel extends HTMLElement {
     if (d.image_url) return d.image_url;
     const model = d.definition?.model;
     if (!model) return '';
-    return `https://www.zigbee2mqtt.io/images/devices/${model.replace(/[/ ]+/g, '_')}.png`;
+    return `https://www.zigbee2mqtt.io/images/devices/${model.replace(/\//g, '-').replace(/\s+/g, '_')}.png`;
   }
 
   /** Format a HA state value for display in entity rows. */

@@ -11,7 +11,7 @@ const { getLogger }       = require('./logger');
 function _deviceImageUrl(definition) {
   const model = definition?.model;
   if (!model) return null;
-  const safe = model.replace(/[/ ]+/g, '_');
+  const safe = model.replace(/\//g, '-').replace(/\s+/g, '_');
   return `https://www.zigbee2mqtt.io/images/devices/${safe}.png`;
 }
 
