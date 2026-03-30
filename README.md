@@ -82,15 +82,30 @@ This imports:
 
 ## Supported Hardware
 
+### USB / Serial adapters
+
 | Chip | Adapter | Status |
 |---|---|---|
 | CC2652P / CC2652R (Sonoff Dongle Plus, SZBT-7) | zstack | ✅ Recommended |
 | CC2652RB (Tube's CC2652RB) | zstack | ✅ Recommended |
 | CC1352P | zstack | ✅ Supported |
 | ConBee II / RaspBee II | deconz | ✅ Supported |
-| EZSP (Sonoff Dongle Plus-E, HUSBZB-1) | ezsp | ⚠️ Experimental |
+| EZSP / EFR32 (Sonoff Dongle Plus-E, HUSBZB-1) | ezsp / ember | ⚠️ Experimental |
 | ZiGate | zigate | ⚠️ Experimental |
+| nRF (ZBOSS) | zboss | ⚠️ Experimental |
 | CC2531 | zstack | ❌ Not recommended (old, limited) |
+
+### Network coordinators (TCP / mDNS)
+
+Set `serial_port` to a URI instead of a device path — no extra drivers or software needed.
+
+| Device | serial_port example |
+|---|---|
+| SLZB-06 / SLZB-06M | `tcp://192.168.1.100:6638` |
+| Tube's Zigbee Gateway | `tcp://192.168.1.100:6638` |
+| UZG-01 | `tcp://192.168.1.100:6638` |
+| ZigStar | `tcp://192.168.1.100:6638` |
+| Any mDNS/Zeroconf adapter | `mdns://hostname` |
 
 ---
 
@@ -124,8 +139,11 @@ This imports:
 
 | Option | Default | Description |
 |---|---|---|
-| `serial_port` | `/dev/ttyUSB0` | Path to Zigbee coordinator |
-| `adapter` | `auto` | Adapter type: auto, zstack, deconz, ezsp, zigate |
+| `serial_port` | `/dev/ttyUSB0` | Coordinator path or URI — see below |
+| `adapter` | `auto` | Adapter type: auto, zstack, deconz, ezsp, ember, zigate, zboss |
+| `baudrate` | `115200` | Serial baud rate (USB only — ignored for TCP/mDNS) |
+| `rtscts` | `false` | Hardware flow control (USB only — ConBee II requires `true`) |
+| `disable_led` | `false` | Disable the coordinator LED (SLZB-06, some CC2652P sticks) |
 | `channel` | `11` | Zigbee channel (11-26) |
 | `log_level` | `info` | Log level: debug, info, warning, error |
 | `availability_timeout` | `300` | Seconds before battery device marked unavailable |
@@ -134,6 +152,14 @@ This imports:
 | `command_retries` | `3` | Number of command retry attempts |
 | `nvram_backup` | `true` | Enable automatic NVRam backups |
 | `nvram_backup_interval` | `3600` | Seconds between automatic backups |
+
+#### `serial_port` formats
+
+```
+/dev/ttyUSB0                    # USB serial (also /dev/serial/by-id/...)
+tcp://192.168.1.100:6638        # Network coordinator over TCP
+mdns://slzb-06                  # Network coordinator via mDNS/Zeroconf
+```
 
 ---
 
