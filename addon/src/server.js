@@ -54,6 +54,51 @@ async function main() {
 
   // Track retries per IEEE address — cleared on success or after max retries
   const interviewRetries = new Map();
+  const MAX_RETRIES    = 3;
+  const RETRY_DELAY_MS = 15000; // 15s — gives sleepy end devices time to wake and poll
+
+  /**
+   * Schedule an interview retry for a device that failed to interview.
+   *
+   * NOTE: When we call rawDevice.interview() directly (not via the herdsman
+   * Controller's join handler), herdsman does NOT re-emit the 'deviceInterview'
+   * event on failure. That means the 'device_interview_failed' handler below
+   * is NOT triggered by retry failures. We therefore schedule the next retry
+   * explicitly from the catch block, passing the incremented attempt counter.
+   *
+   * @param {object} rawDevice  - raw herdsman Device object
+   * @param {number} attempt    - which retry attempt this is (1-indexed)
+   */
+  function scheduleInterviewRetry(rawDevice, attempt) {
+    const ieee       = rawDevice.ieeeAddr;
+    const serialized = zigbee.serializeDevice(rawDevice);
+    const model      = serialized.model_id ?? null;
+
+    if (attempt > MAX_RETRIES) {
+      interviewRetries.delete(ieee);
+      log.warn(`[zigbee] Interview FAILED: ${ieee} (${serialized.model_id || 'unknown'}) — giving up after ${MAX_RETRIES} retries`);
+      wsApi.broadcast('zigbee2hass/device/interview', { ieee_address: ieee, model_id: model, status: 'failed' });
+      return;
+    }
+
+    interviewRetries.set(ieee, attempt);
+    log.warn(`[zigbee] Interview FAILED: ${ieee} (${serialized.model_id || 'unknown'}) — retrying in ${RETRY_DELAY_MS / 1000}s (attempt ${attempt}/${MAX_RETRIES})`);
+    // Keep the pairing modal showing 'started' while retries are in flight
+    wsApi.broadcast('zigbee2hass/device/interview', { ieee_address: ieee, model_id: model, status: 'started' });
+
+    setTimeout(async () => {
+      try {
+        await zigbee.retryInterview(rawDevice);
+        // On success the 'device_interview_succeeded' event fires via herdsman — handled below
+      } catch (err) {
+        log.warn(`[zigbee] Interview retry ${attempt} failed for ${ieee}: ${err.message}`);
+        // herdsman does NOT emit 'deviceInterview' for direct interview() calls,
+        // so we must schedule the next retry ourselves rather than waiting for
+        // the 'device_interview_failed' event to fire again.
+        scheduleInterviewRetry(rawDevice, attempt + 1);
+      }
+    }, RETRY_DELAY_MS);
+  }
 
   // Device lifecycle
   on('device_interview_succeeded', (device) => {
@@ -66,28 +111,11 @@ async function main() {
   });
   on('device_interview_failed', (rawDevice) => {
     const ieee = rawDevice.ieeeAddr;
-    const serialized = zigbee.serializeDevice(rawDevice);
-    const attempt = (interviewRetries.get(ieee) ?? 0) + 1;
-    const MAX_RETRIES = 3;
-    const RETRY_DELAY_MS = 15000; // 15s — gives sleepy end devices time to wake and poll
-
-    if (attempt <= MAX_RETRIES) {
-      interviewRetries.set(ieee, attempt);
-      log.warn(`[zigbee] Interview FAILED: ${ieee} (${serialized.model_id || 'unknown'}) — retrying in ${RETRY_DELAY_MS / 1000}s (attempt ${attempt}/${MAX_RETRIES})`);
-      // Keep showing 'started' in the pairing modal during retries
-      wsApi.broadcast('zigbee2hass/device/interview', { ieee_address: ieee, model_id: serialized.model_id ?? null, status: 'started' });
-      setTimeout(async () => {
-        try {
-          await zigbee.retryInterview(rawDevice);
-        } catch (err) {
-          log.warn(`[zigbee] Interview retry ${attempt} failed for ${ieee}: ${err.message}`);
-        }
-      }, RETRY_DELAY_MS);
-    } else {
-      interviewRetries.delete(ieee);
-      log.warn(`[zigbee] Interview FAILED: ${ieee} (${serialized.model_id || 'unknown'}) — giving up after ${MAX_RETRIES} retries`);
-      wsApi.broadcast('zigbee2hass/device/interview', { ieee_address: ieee, model_id: serialized.model_id ?? null, status: 'failed' });
-    }
+    // Guard: if already in the retry chain (interviewRetries has an entry),
+    // this event was unexpectedly re-emitted by herdsman during a retry —
+    // our scheduleInterviewRetry() catch block handles progression, so skip.
+    if (interviewRetries.has(ieee)) return;
+    scheduleInterviewRetry(rawDevice, 1);
   });
   on('device_joined', (device) => {
     log.info(`[zigbee] Device joined network: ${device.ieee_address}`);
