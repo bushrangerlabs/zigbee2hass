@@ -21,7 +21,6 @@ class Zigbee2HASSPanel extends HTMLElement {
       this._devices     = [];
       this._haDeviceMap = {};  // ieee_address → HA device_id
       this._haEntityMap = {};  // HA device_id  → [entity_id, ...]
-      this._deviceImageLookup = {};  // raw model_id → blakadder image URL
       this._bridgeAvailable = false;
       this._permitJoin      = false;
       this._permitCountdown = 0;
@@ -542,12 +541,6 @@ class Zigbee2HASSPanel extends HTMLElement {
 
   async _fullLoad() {
     try {
-      // Fetch the static Blakadder image lookup once (subsequent calls are cached by browser)
-      fetch('/zigbee2hass/panel/zigbee-device-images.json')
-        .then(r => r.ok ? r.json() : Promise.reject(r.status))
-        .then(j => { this._deviceImageLookup = j; })
-        .catch(e => console.warn('[zigbee2hass] image lookup unavailable', e));
-
       const [zigbeeRes, devRegRaw, entRegRaw] = await Promise.all([
         this._hass.callWS({ type: 'zigbee2hass/get_devices' }),
         this._hass.callWS({ type: 'config/device_registry/list' }),
@@ -1280,27 +1273,12 @@ class Zigbee2HASSPanel extends HTMLElement {
    * Return the best available image URL for a device.
    * Priority:
    *   1. Blakadder lookup keyed by raw herdsman model_id  (available immediately on join)
-   *   2. zigbee2mqtt CDN keyed by ZHC definition.model    (available after interview)
-   * The <img> onerror in _cardHtml falls back to an emoji if all URLs fail.
-   */
+  /** Return the device image URL — prefer the one resolved server-side, fall back to constructing from definition.model. */
   _deviceImageUrl(d) {
-    // 1. Blakadder lookup (raw modelID → verified image URL)
-    const rawId = d.model_id ?? '';
-    if (rawId && this._deviceImageLookup[rawId]) {
-      return this._deviceImageLookup[rawId];
-    }
-    // 2. zigbee2mqtt CDN (definition.model e.g. "E1524/E1810")
-    const defModel = d.definition?.model ?? '';
-    if (defModel) {
-      const safe = defModel.replace(/[/ ]+/g, '_');
-      return `https://www.zigbee2mqtt.io/images/devices/${safe}.png`;
-    }
-    // 3. Last resort — try the raw modelID on z2m CDN too
-    if (rawId) {
-      const safe = rawId.replace(/[/ ]+/g, '_');
-      return `https://www.zigbee2mqtt.io/images/devices/${safe}.png`;
-    }
-    return '';
+    if (d.image_url) return d.image_url;
+    const model = d.definition?.model;
+    if (!model) return '';
+    return `https://www.zigbee2mqtt.io/images/devices/${model.replace(/[/ ]+/g, '_')}.png`;
   }
 
   /** Format a HA state value for display in entity rows. */

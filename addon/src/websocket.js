@@ -4,6 +4,18 @@ const { WebSocketServer } = require('ws');
 const { getLogger }       = require('./logger');
 
 /**
+ * Build a zigbee2mqtt.io CDN image URL from a serialized ZHC definition.
+ * definition.model is e.g. "E1524/E1810" — replace / and spaces with _.
+ * Returns null if definition or model is unavailable.
+ */
+function _deviceImageUrl(definition) {
+  const model = definition?.model;
+  if (!model) return null;
+  const safe = model.replace(/[/ ]+/g, '_');
+  return `https://www.zigbee2mqtt.io/images/devices/${safe}.png`;
+}
+
+/**
  * Message types sent TO clients (HA integration)
  *
  *  zigbee2hass/bridge/state          - bridge online/offline/reconnecting
@@ -138,6 +150,7 @@ class WebSocketAPI {
           ...d,
           friendly_name: this.devices.getFriendlyName(d.ieee_address) ?? d.model_id ?? d.ieee_address,
           definition:    definitions[d.ieee_address] ?? null,
+          image_url:     _deviceImageUrl(definitions[d.ieee_address]),
           state:         allStates[d.ieee_address] ?? {},
           available:     this.devices.getAvailability(d.ieee_address).available,
         })),
@@ -166,6 +179,7 @@ class WebSocketAPI {
             ...d,
             friendly_name: this.devices.getFriendlyName(d.ieee_address) ?? d.model_id ?? d.ieee_address,
             definition:    definitions[d.ieee_address] ?? null,
+            image_url:     _deviceImageUrl(definitions[d.ieee_address]),
             state:         allStates[d.ieee_address] ?? {},
             available:     this.devices.getAvailability(d.ieee_address).available,
           })));
