@@ -29,6 +29,7 @@ class Zigbee2HASSPanel extends HTMLElement {
       this._activeTab        = 'devices';
       this._selectedGroupId  = null;
       this._groups           = [];
+      this._mapData          = null;  // cached LQI scan result
       this._setup();
       this._fullLoad();
       this._startPolling();
@@ -463,13 +464,14 @@ class Zigbee2HASSPanel extends HTMLElement {
         .map-node circle:active { cursor: grabbing; }
         .map-node text { font-size: 11px; fill: var(--primary-text-color,#212121); pointer-events: none; user-select: none; }
         .map-link { stroke: #bbb; stroke-opacity: 0.7; fill: none; }
-        .map-link.strong { stroke: #4caf50; stroke-opacity: 0.85; }
+        .map-link.strong { stroke: #4caf50; stroke-opacity: 0.9; }
         .map-link.medium { stroke: #ff9800; stroke-opacity: 0.85; }
-        .map-link.weak   { stroke: #f44336; stroke-opacity: 0.85; }
+        .map-link.weak   { stroke: #f44336; stroke-opacity: 0.75; stroke-dasharray: 7 4; }
         .map-legend { display:flex; gap:16px; flex-wrap:wrap; margin-top:10px; font-size:0.78rem; color:var(--secondary-text-color,#757575); }
         .map-legend span { display:flex; align-items:center; gap:4px; }
         .map-legend .dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; }
         .map-legend .dash { width:18px; height:3px; border-radius:2px; flex-shrink:0; }
+        .map-legend .dash-weak { width:18px; height:3px; flex-shrink:0; background: repeating-linear-gradient(90deg,#f44336 0,#f44336 7px,transparent 7px,transparent 11px); }
         .map-hint { font-size:0.72rem; color:var(--secondary-text-color,#9e9e9e); margin-top:6px; }
 
         /* ── Groups ── */
@@ -1057,14 +1059,16 @@ class Zigbee2HASSPanel extends HTMLElement {
 
   async _renderNetworkMap() {
     const content = this.shadowRoot.getElementById('content');
-    content.innerHTML = `<div class="map-wrap"><div class="loading"><div class="spinner"></div>Scanning network… (this may take up to 2 minutes on large networks)</div></div>`;
     try {
-      const [map, d3] = await Promise.all([
-        this._hass.callWS({ type: 'zigbee2hass/get_network_map' }),
-        this._loadD3(),
-      ]);
-      this._drawNetworkMap(content, map, d3);
+      const d3 = await this._loadD3();
+      if (!this._mapData) {
+        // First load or after Rescan — show spinner and do LQI scan
+        content.innerHTML = `<div class="map-wrap"><div class="loading"><div class="spinner"></div>Scanning network… (may take a minute on large networks)</div></div>`;
+        this._mapData = await this._hass.callWS({ type: 'zigbee2hass/get_network_map' });
+      }
+      this._drawNetworkMap(content, this._mapData, d3);
     } catch (err) {
+      this._mapData = null;  // allow retry
       content.innerHTML = `<div class="error-msg">⚠ Network map failed: ${this._escHtml(err.message ?? String(err))}</div>`;
     }
   }
@@ -1086,15 +1090,18 @@ class Zigbee2HASSPanel extends HTMLElement {
           <span><span class="dot" style="background:#03a9f4"></span>Coordinator</span>
           <span><span class="dot" style="background:#4caf50"></span>Router</span>
           <span><span class="dot" style="background:#ff9800"></span>End device</span>
-          <span><span class="dash" style="background:#4caf50"></span>Strong (&ge;170)</span>
-          <span><span class="dash" style="background:#ff9800"></span>Medium (&ge;85)</span>
-          <span><span class="dash" style="background:#f44336"></span>Weak (&lt;85)</span>
+          <span><span class="dash" style="background:#4caf50"></span>Strong (&ge;170) — solid</span>
+          <span><span class="dash" style="background:#ff9800"></span>Medium (&ge;85) — solid</span>
+          <span><span class="dash dash-weak"></span>Weak (&lt;85) — dashed</span>
         </div>
         <div class="map-hint">Drag nodes to reposition &bull; Scroll/pinch to zoom &bull; Drag background to pan</div>
         <div style="margin-top:10px"><button class="btn-ghost btn-sm" id="btn-map-refresh">↺ Rescan</button></div>
       </div>`;
 
-    content.querySelector('#btn-map-refresh')?.addEventListener('click', () => this._renderNetworkMap());
+    content.querySelector('#btn-map-refresh')?.addEventListener('click', () => {
+      this._mapData = null;  // force re-scan
+      this._renderNetworkMap();
+    });
 
     const svgEl  = this.shadowRoot.getElementById('map-svg');
     const rootEl = this.shadowRoot.getElementById('map-root');
@@ -1123,7 +1130,7 @@ class Zigbee2HASSPanel extends HTMLElement {
       .data(links)
       .join('line')
         .attr('class', d => 'map-link ' + (d.lqi >= 170 ? 'strong' : d.lqi >= 85 ? 'medium' : 'weak'))
-        .attr('stroke-width', d => d.lqi >= 170 ? 2.5 : 1.5)
+        .attr('stroke-width', d => d.lqi >= 170 ? 3 : d.lqi >= 85 ? 2 : 1.5)
         .each(function(d) { d3.select(this).append('title').text(`LQI: ${d.lqi}`); });
 
     // ── Nodes ──────────────────────────────────────────────────────────────
@@ -1147,9 +1154,26 @@ class Zigbee2HASSPanel extends HTMLElement {
       .attr('stroke-width', 2.5);
 
     nodeSel.append('text')
-      .attr('dy',           d => (d.type === 'Coordinator' ? R + 4 : R) + 14)
-      .attr('text-anchor',  'middle')
-      .text(d => (d.model ?? d.ieee ?? '').slice(0, 16));
+      .attr('y',           d => (d.type === 'Coordinator' ? R + 4 : R) + 14)
+      .attr('text-anchor', 'middle')
+      .each(function(d) {
+        const label = d.model ?? d.ieee ?? '';
+        const el = d3.select(this);
+        // Split long labels at a word boundary into at most 2 lines
+        if (label.length <= 14 || !label.includes(' ')) {
+          el.text(label);
+        } else {
+          const words = label.split(' ');
+          let split = 1, bestDiff = Infinity, cum = 0;
+          for (let i = 0; i < words.length - 1; i++) {
+            cum += words[i].length + 1;
+            const diff = Math.abs(cum - label.length / 2);
+            if (diff < bestDiff) { bestDiff = diff; split = i + 1; }
+          }
+          el.append('tspan').attr('x', 0).attr('dy', 0).text(words.slice(0, split).join(' '));
+          el.append('tspan').attr('x', 0).attr('dy', '1.3em').text(words.slice(split).join(' '));
+        }
+      });
 
     nodeSel.append('title')
       .text(d => [d.model, d.type, d.ieee].filter(Boolean).join('\n'));
