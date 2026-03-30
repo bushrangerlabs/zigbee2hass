@@ -366,7 +366,7 @@ class ZigbeeController {
       // Pass the raw herdsman Device so zhc.findByDevice() can match it correctly
       if (d.status === 'successful')  this.emit('device_interview_succeeded', d.device);
       else if (d.status === 'started') this.emit('device_interview_started',   this._serializeDevice(d.device));
-      else                             this.emit('device_interview_failed',    this._serializeDevice(d.device));
+      else                             this.emit('device_interview_failed',    d.device);  // raw device — needed for retry
     });
     h.on('deviceAnnounce',          (d)    => this.emit('device_announce',            d.device));  // raw device for definition lookup
     h.on('deviceLeave',             (d)    => this.emit('device_leave',               { ieee_address: d.ieeeAddr }));
@@ -383,6 +383,15 @@ class ZigbeeController {
 
   serializeDevice(device) {
     return this._serializeDevice(device);
+  }
+
+  /**
+   * Re-trigger the interview for a device that previously failed.
+   * Called by server.js retry logic after a delay.
+   */
+  async retryInterview(rawDevice) {
+    this.log.info(`[zigbee] Retrying interview for ${rawDevice.ieeeAddr}`);
+    await rawDevice.interview();
   }
 
   _serializeDevice(device) {

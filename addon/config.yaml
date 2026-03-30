@@ -1,6 +1,6 @@
 name: "Zigbee2HASS"
 description: "Reliable Zigbee for Home Assistant via zigbee-herdsman. No MQTT required."
-version: "0.1.43"
+version: "0.1.44"
 slug: "zigbee2hass"
 url: "https://github.com/bushrangerlabs/zigbee2hass"
 arch:

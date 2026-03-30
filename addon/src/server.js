@@ -52,17 +52,42 @@ async function main() {
 
   // ── Wire events ─────────────────────────────────────────────────────────
 
+  // Track retries per IEEE address — cleared on success or after max retries
+  const interviewRetries = new Map();
+
   // Device lifecycle
   on('device_interview_succeeded', (device) => {
+    interviewRetries.delete(device.ieeeAddr);
     devices.onDeviceInterview(device);
   });
   on('device_interview_started', (device) => {
     log.info(`[zigbee] Interview started: ${device.ieee_address} (${device.model_id || 'unknown'})`);
     wsApi.broadcast('zigbee2hass/device/interview', { ieee_address: device.ieee_address, model_id: device.model_id ?? null, status: 'started' });
   });
-  on('device_interview_failed', (device) => {
-    log.warn(`[zigbee] Interview FAILED: ${device.ieee_address} (${device.model_id || 'unknown'}) — device may be too far away or incompatible`);
-    wsApi.broadcast('zigbee2hass/device/interview', { ieee_address: device.ieee_address, model_id: device.model_id ?? null, status: 'failed' });
+  on('device_interview_failed', (rawDevice) => {
+    const ieee = rawDevice.ieeeAddr;
+    const serialized = zigbee.serializeDevice(rawDevice);
+    const attempt = (interviewRetries.get(ieee) ?? 0) + 1;
+    const MAX_RETRIES = 3;
+    const RETRY_DELAY_MS = 15000; // 15s — gives sleepy end devices time to wake and poll
+
+    if (attempt <= MAX_RETRIES) {
+      interviewRetries.set(ieee, attempt);
+      log.warn(`[zigbee] Interview FAILED: ${ieee} (${serialized.model_id || 'unknown'}) — retrying in ${RETRY_DELAY_MS / 1000}s (attempt ${attempt}/${MAX_RETRIES})`);
+      // Keep showing 'started' in the pairing modal during retries
+      wsApi.broadcast('zigbee2hass/device/interview', { ieee_address: ieee, model_id: serialized.model_id ?? null, status: 'started' });
+      setTimeout(async () => {
+        try {
+          await zigbee.retryInterview(rawDevice);
+        } catch (err) {
+          log.warn(`[zigbee] Interview retry ${attempt} failed for ${ieee}: ${err.message}`);
+        }
+      }, RETRY_DELAY_MS);
+    } else {
+      interviewRetries.delete(ieee);
+      log.warn(`[zigbee] Interview FAILED: ${ieee} (${serialized.model_id || 'unknown'}) — giving up after ${MAX_RETRIES} retries`);
+      wsApi.broadcast('zigbee2hass/device/interview', { ieee_address: ieee, model_id: serialized.model_id ?? null, status: 'failed' });
+    }
   });
   on('device_joined', (device) => {
     log.info(`[zigbee] Device joined network: ${device.ieee_address}`);
