@@ -39,6 +39,7 @@ BINARY_SENSOR_NAMES = {
     "occupancy", "contact", "water_leak", "smoke", "gas",
     "carbon_monoxide", "vibration", "presence", "tamper",
     "alarm", "moving", "rain", "frost",
+    "battery_low",  # boolean, not a numeric percentage
 }
 
 # Sensor names to skip (internal/diagnostic only surfaced via diagnostics panel)

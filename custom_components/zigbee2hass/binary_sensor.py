@@ -29,6 +29,7 @@ BINARY_CLASS_MAP: dict[str, str] = {
     "rain":            BinarySensorDeviceClass.MOISTURE,
     "frost":           BinarySensorDeviceClass.COLD,
     "alarm":           BinarySensorDeviceClass.PROBLEM,
+    "battery_low":     BinarySensorDeviceClass.BATTERY,
 }
 
 

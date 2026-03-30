@@ -40,6 +40,8 @@ class DeviceManager {
     this._friendlyNames = new Map();
     /** @type {Set<string>} ieee addresses for which device_ready has been emitted */
     this._deviceReadyEmitted = new Set();
+    /** @type {Map<string, NodeJS.Timeout>} "ieee:property" → reset timer for auto-clearing binary states */
+    this._occupancyTimers = new Map();
 
     this._availabilityTimer = null;
   }
@@ -89,6 +91,8 @@ class DeviceManager {
       clearInterval(this._availabilityTimer);
       this._availabilityTimer = null;
     }
+    for (const timer of this._occupancyTimers.values()) clearTimeout(timer);
+    this._occupancyTimers.clear();
   }
 
   // ── Device handling ───────────────────────────────────────────────────────
@@ -253,6 +257,28 @@ class DeviceManager {
 
     this.emit('state_changed', { ieee_address, state: stateUpdate, full_state: next });
 
+    // Auto-reset occupancy/presence after timeout (these sensors only send
+    // "true" — they never send "false" when the area clears)
+    const occupancyTimeoutSecs = this.config.occupancy_timeout ?? 90;
+    if (occupancyTimeoutSecs > 0) {
+      const RESET_PROPERTIES = ['occupancy', 'presence'];
+      for (const prop of RESET_PROPERTIES) {
+        if (stateUpdate[prop] === true) {
+          const key = `${ieee_address}:${prop}`;
+          if (this._occupancyTimers.has(key)) clearTimeout(this._occupancyTimers.get(key));
+          this._occupancyTimers.set(key, setTimeout(() => {
+            this._occupancyTimers.delete(key);
+            const cur = this._state.get(ieee_address) ?? {};
+            if (cur[prop] !== true) return; // already cleared by a real message
+            const reset = { [prop]: false };
+            this._state.set(ieee_address, { ...cur, ...reset });
+            this.log.debug(`[devices] Auto-cleared ${prop} for ${ieee_address} after ${occupancyTimeoutSecs}s`);
+            this.emit('state_changed', { ieee_address, state: reset, full_state: { ...cur, ...reset } });
+          }, occupancyTimeoutSecs * 1000));
+        }
+      }
+    }
+
     // If device_ready was never emitted for this device (e.g. it didn't announce
     // after an addon restart), fire it now on first real state message so HA
     // platforms can create entities.
@@ -276,6 +302,13 @@ class DeviceManager {
     this._state.delete(ieee_address);
     this._availability.delete(ieee_address);
     this._deviceReadyEmitted.delete(ieee_address);
+    // Clear any pending occupancy reset timers for this device
+    for (const key of [...this._occupancyTimers.keys()]) {
+      if (key.startsWith(`${ieee_address}:`)) {
+        clearTimeout(this._occupancyTimers.get(key));
+        this._occupancyTimers.delete(key);
+      }
+    }
   }
 
   // ── Configure / reconfigure ───────────────────────────────────────────────

@@ -23,6 +23,7 @@ const DEFAULTS = {
   availability_ping_interval: 60,       // seconds between pings for mains devices
   command_timeout:          5000,       // ms to wait for command ack
   command_retries:          3,
+  occupancy_timeout:        90,         // seconds before auto-clearing occupancy/presence (0 = disable)
   nvram_backup:             true,
   nvram_backup_interval:    3600,       // seconds between automatic NVRam backups
   permit_join_timeout:      254,        // seconds to keep network open for pairing on startup (0 = disabled)
