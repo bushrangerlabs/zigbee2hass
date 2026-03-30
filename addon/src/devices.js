@@ -38,6 +38,8 @@ class DeviceManager {
     this._pendingCommands = new Map();
     /** @type {Map<string, string>} ieee_address → user-assigned friendly name */
     this._friendlyNames = new Map();
+    /** @type {Set<string>} ieee addresses for which device_ready has been emitted */
+    this._deviceReadyEmitted = new Set();
 
     this._availabilityTimer = null;
   }
@@ -62,10 +64,14 @@ class DeviceManager {
         const label = definition.model ?? '(no model name)';
         this.log.info(`[devices] Loaded definition for ${ieee}: ${label}`);
       } else {
-        this.log.warn(`[devices] No definition for ${ieee} (modelID=${rawDevice.modelID}) — will retry on interview`);
+        this.log.warn(`[devices] No definition for ${ieee} (modelID=${rawDevice.modelID}) — will retry on interview or first message`);
       }
       if (!this._state.has(ieee)) this._state.set(ieee, {});
       if (!this._availability.has(ieee)) this._availability.set(ieee, { available: true, last_seen: Date.now() });
+      // Devices present at startup go through the snapshot path — mark them as
+      // covered so onMessage doesn't redundantly fire device_ready for them if
+      // they already have a definition (entity creation is handled by snapshot).
+      if (definition) this._deviceReadyEmitted.add(ieee);
     }
 
     const loadedCount = this._definitions.size;
@@ -126,6 +132,9 @@ class DeviceManager {
       }
     }
 
+    // Only mark as emitted when we have a real definition — if definition is
+    // null here, the lazy-resolution path in onMessage can still fire it later.
+    if (definition) this._deviceReadyEmitted.add(ieee);
     this.emit('device_ready', {
       device: this.zigbee.serializeDevice(rawDevice),
       definition: definition ? this._serializeDefinition(definition, rawDevice) : null,
@@ -151,6 +160,7 @@ class DeviceManager {
     this._state.set(ieee, {});
     this._availability.set(ieee, { available: true, last_seen: Date.now() });
 
+    if (definition) this._deviceReadyEmitted.add(ieee);
     this.emit('device_ready', {
       device: this.zigbee.serializeDevice(rawDevice),
       definition: definition ? this._serializeDefinition(definition, rawDevice) : null,
@@ -173,8 +183,32 @@ class DeviceManager {
     }
     this._availability.set(ieee_address, avail);
 
-    const definition = this._definitions.get(ieee_address);
-    if (!definition) return; // device not yet interviewed
+    let definition = this._definitions.get(ieee_address);
+
+    // If we have no definition yet, try to resolve it now — covers the case
+    // where findByDevice returned null at startup (e.g. interview incomplete)
+    // but succeeds once the device starts sending data.
+    if (!definition) {
+      const rawDevice = this._rawDevices.get(ieee_address)
+                     ?? this.zigbee.herdsman?.getDeviceByIeeeAddr(ieee_address);
+      if (rawDevice) {
+        this._resolveDefinition(rawDevice).then(def => {
+          if (def) {
+            this.log.info(`[devices] Late definition resolved for ${ieee_address}: ${def.model ?? '?'}`);
+            this._definitions.set(ieee_address, def);
+            this._rawDevices.set(ieee_address, rawDevice);
+            if (!this._deviceReadyEmitted.has(ieee_address)) {
+              this._deviceReadyEmitted.add(ieee_address);
+              this.emit('device_ready', {
+                device:     this.zigbee.serializeDevice(rawDevice),
+                definition: this._serializeDefinition(def, rawDevice),
+              });
+            }
+          }
+        }).catch(() => {});
+      }
+      return; // still no definition for this message cycle
+    }
 
     // zhc v25 fromZigbee converters expect:
     //   msg.endpoint  = raw herdsman Endpoint (for zclTransactionSequenceNumber etc.)
@@ -219,6 +253,19 @@ class DeviceManager {
 
     this.emit('state_changed', { ieee_address, state: stateUpdate, full_state: next });
 
+    // If device_ready was never emitted for this device (e.g. it didn't announce
+    // after an addon restart), fire it now on first real state message so HA
+    // platforms can create entities.
+    if (!this._deviceReadyEmitted.has(ieee_address)) {
+      this._deviceReadyEmitted.add(ieee_address);
+      const rawDev = this._rawDevices.get(ieee_address);
+      this.log.info(`[devices] Firing late device_ready for ${ieee_address} on first message`);
+      this.emit('device_ready', {
+        device:     rawDev ? this.zigbee.serializeDevice(rawDev) : { ieee_address },
+        definition: rawDev ? this._serializeDefinition(definition, rawDev) : null,
+      });
+    }
+
     // Resolve any pending command waiting for confirmation
     this._resolveCommand(ieee_address, stateUpdate);
   }
@@ -228,6 +275,7 @@ class DeviceManager {
     this._rawDevices.delete(ieee_address);
     this._state.delete(ieee_address);
     this._availability.delete(ieee_address);
+    this._deviceReadyEmitted.delete(ieee_address);
   }
 
   // ── Configure / reconfigure ───────────────────────────────────────────────

@@ -369,7 +369,7 @@ class ZigbeeController {
       model_id:         device.modelID,
       power_source:     device.powerSource,
       interviewing:     device.interviewing,
-      interview_completed: device.interviewCompleted,
+      interview_completed: device.interviewState === 'SUCCESSFUL' || !!device.interviewCompleted,
       last_seen:        device.lastSeen,
       endpoints:        device.endpoints.map(ep => ({
         id:            ep.ID,
