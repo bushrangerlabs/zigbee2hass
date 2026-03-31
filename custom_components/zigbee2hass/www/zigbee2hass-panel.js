@@ -924,6 +924,11 @@ class Zigbee2HASSPanel extends HTMLElement {
       if (model_id)      d.model_id      = model_id;
       if (friendly_name) d.friendly_name = friendly_name;
       this._pairingDevices.set(ieee_address, d);
+      // HA has just created entities for this device — rebuild the entity map
+      // so the card shows them immediately without waiting for the 15 s poll.
+      // Delay slightly to give HA entity registry time to commit the new entries.
+      clearTimeout(this._entityMapRefreshTimer);
+      this._entityMapRefreshTimer = setTimeout(() => this._fullLoad(), 2000);
     } else if (type === 'permit_join') {
       this._permitJoin = permit;
       // Server reports remaining seconds via 'remaining' (or ZHC raw 'timeout')

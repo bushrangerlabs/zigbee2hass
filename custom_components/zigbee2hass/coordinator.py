@@ -325,6 +325,10 @@ class Zigbee2HASSCoordinator:
                 via_device=(DOMAIN, "coordinator"),
                 sw_version=device.get("software_build_id"),
             )
+            # Notify entity subscribers so they immediately reflect the fresh
+            # availability / state from the snapshot (fixes entities stuck at
+            # 'unavailable' after an add-on restart without integration reload).
+            self._dispatch_device(ieee)
 
         # Unblock async_start() if it's still waiting
         if self._snapshot_event and not self._snapshot_event.is_set():
