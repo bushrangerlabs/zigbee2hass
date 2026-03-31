@@ -68,11 +68,21 @@ async def async_setup_entry(
             for ieee_address in coordinator.devices:
                 _add_for_device(ieee_address)
 
+    def _on_device_left(event) -> None:
+        if event.data.get("entry_id") == entry.entry_id:
+            ieee = event.data.get("ieee_address")
+            if ieee:
+                stale = {uid for uid in added if uid.startswith(f"{ieee}_")}
+                added.difference_update(stale)
+
     entry.async_on_unload(
         hass.bus.async_listen(f"{DOMAIN}_device_ready", _on_device_ready)
     )
     entry.async_on_unload(
         hass.bus.async_listen(f"{DOMAIN}_devices_loaded", _on_devices_loaded)
+    )
+    entry.async_on_unload(
+        hass.bus.async_listen(f"{DOMAIN}_device_left", _on_device_left)
     )
 
 

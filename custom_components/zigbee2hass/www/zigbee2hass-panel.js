@@ -297,7 +297,11 @@ class Zigbee2HASSPanel extends HTMLElement {
           flex-shrink: 0;
           width: 40px;
           text-align: center;
+          display: flex;
+          align-items: center;
+          justify-content: center;
         }
+        .device-icon ha-icon { width: 36px; height: 36px; }
         .device-info { flex: 1; min-width: 0; }
 
         .device-name {
@@ -431,7 +435,8 @@ class Zigbee2HASSPanel extends HTMLElement {
           border-radius: 6px;
           background: var(--secondary-background-color, #f5f5f5);
         }
-        .entity-icon  { font-size: 1rem; flex-shrink: 0; width: 22px; text-align: center; }
+        .entity-icon  { font-size: 1rem; flex-shrink: 0; width: 22px; text-align: center; display: flex; align-items: center; justify-content: center; }
+        .entity-icon ha-icon { width: 18px; height: 18px; }
         .entity-label {
           flex: 1;
           font-size: 0.82rem;
@@ -686,7 +691,7 @@ class Zigbee2HASSPanel extends HTMLElement {
       </style>
 
       <div class="header">
-        <h1>⚡ Zigbee Network</h1>
+        <h1><ha-icon icon="mdi:zigbee" style="width:28px;height:28px;vertical-align:middle"></ha-icon> Zigbee Network</h1>
         <div class="bridge-status">
           <span class="dot" id="bridge-dot"></span>
           <span id="bridge-label">connecting…</span>
@@ -696,10 +701,10 @@ class Zigbee2HASSPanel extends HTMLElement {
       </div>
 
       <div class="tabs">
-        <button class="tab-btn active" data-tab="devices">📱 Devices</button>
-        <button class="tab-btn" data-tab="map">🗺 Network Map</button>
-        <button class="tab-btn" data-tab="groups">👥 Groups</button>
-        <button class="tab-btn" data-tab="tools">🔧 Tools</button>
+        <button class="tab-btn active" data-tab="devices"><ha-icon icon="mdi:zigbee" style="width:18px;height:18px;vertical-align:middle"></ha-icon> Devices</button>
+        <button class="tab-btn" data-tab="map"><ha-icon icon="mdi:map-marker-path" style="width:18px;height:18px;vertical-align:middle"></ha-icon> Network Map</button>
+        <button class="tab-btn" data-tab="groups"><ha-icon icon="mdi:account-group" style="width:18px;height:18px;vertical-align:middle"></ha-icon> Groups</button>
+        <button class="tab-btn" data-tab="tools"><ha-icon icon="mdi:tools" style="width:18px;height:18px;vertical-align:middle"></ha-icon> Tools</button>
       </div>
 
       <div id="pj-banner-container" style="display:none"></div>
@@ -1090,7 +1095,7 @@ class Zigbee2HASSPanel extends HTMLElement {
     const model      = d.definition?.model ?? d.model_id ?? '';
     const name       = this._escHtml(d.friendly_name ?? d.model_id ?? d.ieee_address);
     const ieee       = this._escHtml(d.ieee_address);
-    const incomplete = !d.interview_completed ? '⚠ ' : '';
+    const incomplete = !d.interview_completed ? '<ha-icon icon="mdi:alert-outline" style="width:16px;height:16px;vertical-align:middle;color:var(--warning-color,orange)"></ha-icon> ' : '';
     const metaParts  = [vendor, model].filter(Boolean);
     const meta       = this._escHtml(metaParts.join(' — '));
     const lastSeen   = d.last_seen ? this._relativeTime(d.last_seen) : '—';
@@ -1107,7 +1112,7 @@ class Zigbee2HASSPanel extends HTMLElement {
       </span>` : '';
 
     const battHtml = battery != null ? `
-      <span class="stat" title="Battery">🔋 ${battery}%</span>` : '';
+      <span class="stat" title="Battery"><ha-icon icon="mdi:battery" style="width:14px;height:14px;vertical-align:middle"></ha-icon> ${battery}%</span>` : '';
 
     const actionHtml = action ? `
       <span class="stat"><span class="action-chip" title="Last action">${this._escHtml(String(action))}</span></span>` : '';
@@ -1212,51 +1217,53 @@ class Zigbee2HASSPanel extends HTMLElement {
 
   _entityIcon(domain, stateObj) {
     const dc = stateObj?.attributes?.device_class;
-    if (domain === 'light')         return '💡';
-    if (domain === 'switch')        return '🔌';
-    if (domain === 'cover')         return '🪟';
-    if (domain === 'climate')       return '❄️';
-    if (domain === 'lock')          return '🔐';
-    if (domain === 'alarm_control_panel') return '🚨';
-    if (domain === 'automation')    return '⚙️';
+    const i = (icon) => `<ha-icon icon="${icon}"></ha-icon>`;
+    if (domain === 'light')         return i('mdi:lightbulb');
+    if (domain === 'switch')        return i('mdi:power-socket');
+    if (domain === 'cover')         return i('mdi:window-shutter');
+    if (domain === 'climate')       return i('mdi:thermostat');
+    if (domain === 'lock')          return i('mdi:lock');
+    if (domain === 'alarm_control_panel') return i('mdi:shield-home');
+    if (domain === 'automation')    return i('mdi:robot');
     if (domain === 'binary_sensor') {
-      if (dc === 'motion' || dc === 'occupancy') return '🏃';
-      if (dc === 'door' || dc === 'window' || dc === 'contact') return '🚪';
-      if (dc === 'smoke')  return '🔥';
-      if (dc === 'battery') return '🔋';
-      return '●';
+      if (dc === 'motion' || dc === 'occupancy') return i('mdi:motion-sensor');
+      if (dc === 'door' || dc === 'window' || dc === 'contact') return i('mdi:door');
+      if (dc === 'smoke')   return i('mdi:smoke-detector');
+      if (dc === 'battery') return i('mdi:battery');
+      return i('mdi:checkbox-blank-circle-outline');
     }
     if (domain === 'sensor') {
-      if (dc === 'battery')     return '🔋';
-      if (dc === 'temperature') return '🌡️';
-      if (dc === 'humidity')    return '💧';
-      if (dc === 'illuminance') return '☀️';
-      if (dc === 'power')       return '⚡';
-      if (dc === 'energy')      return '⚡';
-      return '📊';
+      if (dc === 'battery')     return i('mdi:battery');
+      if (dc === 'temperature') return i('mdi:thermometer');
+      if (dc === 'humidity')    return i('mdi:water-percent');
+      if (dc === 'illuminance') return i('mdi:brightness-5');
+      if (dc === 'power')       return i('mdi:lightning-bolt');
+      if (dc === 'energy')      return i('mdi:lightning-bolt');
+      return i('mdi:chart-line');
     }
-    if (domain === 'event')  return '🔘';
-    if (domain === 'button') return '🔘';
-    if (domain === 'device_tracker') return '📍';
-    if (domain === 'update') return '🔄';
-    return '●';
+    if (domain === 'event')  return i('mdi:gesture-tap-button');
+    if (domain === 'button') return i('mdi:gesture-tap-button');
+    if (domain === 'device_tracker') return i('mdi:map-marker');
+    if (domain === 'update') return i('mdi:update');
+    return i('mdi:circle-small');
   }
 
   _deviceIcon(d) {
-    if (!d.definition?.exposes) return '❓';
+    const i = (icon) => `<ha-icon icon="${icon}"></ha-icon>`;
+    if (!d.definition?.exposes) return i('mdi:help-circle-outline');
     const exposes = d.definition.exposes;
     const names   = exposes.flatMap(e => [e.type, e.name, ...(e.features?.map(f => f.name) ?? [])]);
-    if (names.includes('light') || names.includes('brightness') || names.includes('color_temp')) return '💡';
-    if (names.includes('position') || names.includes('tilt'))  return '🪟';
-    if (names.includes('climate') || names.includes('occupied_heating_setpoint')) return '❄️';
-    if (names.includes('lock') || names.includes('state') && names.includes('lock')) return '🔐';
-    if (names.includes('occupancy')) return '🏃';
-    if (names.includes('contact'))   return '🚪';
-    if (names.includes('smoke'))     return '🔥';
-    if (names.includes('action'))    return '🔘';
-    if (names.includes('switch') || names.includes('state')) return '🔌';
-    if (d.power_source === 'Battery') return '🔋';
-    return '📟';
+    if (names.includes('light') || names.includes('brightness') || names.includes('color_temp')) return i('mdi:lightbulb');
+    if (names.includes('position') || names.includes('tilt'))  return i('mdi:window-shutter');
+    if (names.includes('climate') || names.includes('occupied_heating_setpoint')) return i('mdi:thermostat');
+    if (names.includes('lock') || (names.includes('state') && names.includes('lock'))) return i('mdi:lock');
+    if (names.includes('occupancy')) return i('mdi:motion-sensor');
+    if (names.includes('contact'))   return i('mdi:door');
+    if (names.includes('smoke'))     return i('mdi:smoke-detector');
+    if (names.includes('action'))    return i('mdi:gesture-tap-button');
+    if (names.includes('switch') || names.includes('state')) return i('mdi:power-socket');
+    if (d.power_source === 'Battery') return i('mdi:battery');
+    return i('mdi:devices');
   }
 
   // ── Device actions ────────────────────────────────────────────────────────
@@ -1333,7 +1340,7 @@ class Zigbee2HASSPanel extends HTMLElement {
     const safeId = ieee.replace(/x|:/g, '');
     const nameEl = this.shadowRoot.getElementById(`name-${safeId}`);
     if (!nameEl) return;
-    const current = nameEl.textContent.replace(/^⚠ /, '');
+    const current = nameEl.textContent.trim();
     const input = document.createElement('input');
     input.className = 'device-name-input';
     input.value = current;
@@ -1580,7 +1587,7 @@ class Zigbee2HASSPanel extends HTMLElement {
       ? '<p style="font-size:0.82rem;color:var(--secondary-text-color,#aaa)">No groups yet.</p>'
       : groups.map(g => `
         <div class="group-item ${g.id === selId ? 'selected' : ''}" data-gid="${g.id}">
-          👥 Group ${g.id} <span style="font-size:0.75rem;color:var(--secondary-text-color,#aaa);margin-left:auto">${g.members.length} member${g.members.length !== 1 ? 's' : ''}</span>
+          <ha-icon icon="mdi:account-group" style="width:16px;height:16px;vertical-align:middle"></ha-icon> Group ${g.id} <span style="font-size:0.75rem;color:var(--secondary-text-color,#aaa);margin-left:auto">${g.members.length} member${g.members.length !== 1 ? 's' : ''}</span>
         </div>`).join('');
 
     const detailHtml = selGroup ? `

@@ -227,12 +227,25 @@ class DeviceManager {
     // _normalizeMessage now preserves these, so msg is already suitable.
     // We only need to supply the 'meta' argument (converter context).
     const rawDevice = this._rawDevices.get(ieee_address);
+
+    // Some ZHC v25 fromZigbee converters destructure 'publish' from meta
+    // (or shadow the positional publish arg with meta.publish). Provide a real
+    // publish function so converters can push intermediate state updates.
+    const publishState = (partialState) => {
+      if (!partialState || typeof partialState !== 'object') return;
+      const cur  = this._state.get(ieee_address) ?? {};
+      const next = { ...cur, ...partialState };
+      this._state.set(ieee_address, next);
+      this.emit('state_changed', { ieee_address, state: partialState, full_state: next });
+    };
+
     const meta = {
       device:   rawDevice,
       endpoint: msg.endpoint,  // raw Endpoint (already in normalized msg)
       logger:   this.log,
       state:    this._state.get(ieee_address) ?? {},
       options:  {},
+      publish:  publishState,
     };
 
     // Run through converters to get state
@@ -244,7 +257,9 @@ class DeviceManager {
       if (!clusters.includes(cluster)) continue;
 
       try {
-        const result = converter.convert(definition, msg, null, {}, meta);
+        // Pass publishState as both positional publish arg AND meta.publish so
+        // converters find it regardless of which calling convention they use.
+        const result = converter.convert(definition, msg, publishState, {}, meta);
         if (result) Object.assign(stateUpdate, result);
       } catch (err) {
         this.log.debug(`[devices] Converter error for ${ieee_address}: ${err.message}`);
@@ -396,32 +411,84 @@ class DeviceManager {
     const definition = this._definitions.get(ieee_address);
     if (!definition) throw new Error(`No definition for ${ieee_address}`);
 
-    const device = this.zigbee.herdsman?.getDeviceByIeeeAddr(ieee_address);
-    if (!device) throw new Error(`Device ${ieee_address} not found`);
+    const rawDevice = this._rawDevices.get(ieee_address)
+                   ?? this.zigbee.herdsman?.getDeviceByIeeeAddr(ieee_address);
+    if (!rawDevice) throw new Error(`Device ${ieee_address} not found`);
 
-    const endpoint = device.endpoints[0];
-    if (!endpoint) throw new Error(`No endpoints on ${ieee_address}`);
+    // Build endpoint name → ID map for multi-endpoint devices
+    // e.g. TS0003 3-gang: definition.endpoint(device) = {left:1, center:2, right:3}
+    // HA sends {state_left:'ON'} → we must strip '_left', resolve endpoint 1, send 'state'.
+    const endpointNameMap = typeof definition.endpoint === 'function'
+      ? (definition.endpoint(rawDevice) ?? {})
+      : {};
+
+    // Decompose each payload key into { baseKey, value, endpointId }
+    const items = Object.entries(payload).map(([rawKey, value]) => {
+      for (const [epName, epId] of Object.entries(endpointNameMap)) {
+        if (rawKey.endsWith(`_${epName}`)) {
+          return { baseKey: rawKey.slice(0, -(epName.length + 1)), value, endpointId: epId, rawKey };
+        }
+      }
+      return { baseKey: rawKey, value, endpointId: null, rawKey };
+    });
+
+    const publishFn = (partialState) => {
+      if (!partialState || typeof partialState !== 'object') return;
+      const cur  = this._state.get(ieee_address) ?? {};
+      const next = { ...cur, ...partialState };
+      this._state.set(ieee_address, next);
+      this.emit('state_changed', { ieee_address, state: partialState, full_state: next });
+    };
 
     const errors = [];
 
     for (let attempt = 1; attempt <= this.config.command_retries; attempt++) {
       try {
-        // Convert HA-style payload to ZCL commands using toZigbee converters
-        for (const converter of definition.toZigbee ?? []) {
-          const keys = Array.isArray(converter.key) ? converter.key : [converter.key];
-          const relevant = Object.keys(payload).filter(k => keys.includes(k));
-          if (relevant.length === 0) continue;
+        let converterRan = false;
 
-          const subPayload = Object.fromEntries(relevant.map(k => [k, payload[k]]));
-          const meta       = { message: payload, mapped: definition, endpoint, device };
-          const result     = await converter.convertSet(endpoint, converter.key, subPayload, meta);
+        for (const { baseKey, value, endpointId } of items) {
+          // Resolve the endpoint for this key
+          const ep = endpointId != null
+            ? (rawDevice.getEndpoint(endpointId) ?? rawDevice.endpoints[0])
+            : rawDevice.endpoints[0];
+          if (!ep) throw new Error(`No endpoint on ${ieee_address}`);
+
+          // Find the toZigbee converter that handles this base key
+          const converter = (definition.toZigbee ?? []).find(tz => {
+            const ks = Array.isArray(tz.key) ? tz.key : [tz.key];
+            return ks.includes(baseKey);
+          });
+          if (!converter) {
+            this.log.debug(`[devices] No toZigbee converter for '${baseKey}' on ${ieee_address}`);
+            continue;
+          }
+
+          const meta = {
+            message: payload,
+            mapped:  definition,
+            endpoint: ep,
+            device:  rawDevice,
+            logger:  this.log,
+            state:   this._state.get(ieee_address) ?? {},
+            options: {},
+            publish: publishFn,
+          };
+
+          const result = await converter.convertSet(ep, baseKey, value, meta);
+          converterRan = true;
 
           if (result?.readAfterWriteTime) {
             await new Promise(r => setTimeout(r, result.readAfterWriteTime));
           }
+          // Apply state returned by the converter as optimistic update
+          if (result?.state) { publishFn(result.state); }
         }
 
-        // Wait for state confirmation
+        if (!converterRan) {
+          this.log.warn(`[devices] No toZigbee converter found for payload keys [${Object.keys(payload).join(', ')}] on ${ieee_address}`);
+        }
+
+        // Wait for state confirmation (resolves with current state on timeout)
         const confirmed = await this._waitForConfirmation(ieee_address, payload);
         return confirmed;
 
