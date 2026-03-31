@@ -137,6 +137,20 @@ class DeviceManager {
     const ieee = rawDevice.ieeeAddr;
     if (rawDevice.type === 'Coordinator') return;
 
+    // If the device is joining for the first time and interview is not yet
+    // complete, its modelID is often undefined and there is no valid definition.
+    // Emitting device_ready with definition=null prevents entity creation and
+    // the subsequent real device_ready (with definition) from being handled
+    // correctly by some HA versions.
+    // Mirrors ioBroker.zigbee: only process announce when interviewState == SUCCESSFUL.
+    // onDeviceInterview fires device_ready after a successful interview.
+    if (!rawDevice.interviewCompleted) {
+      this.log.debug(`[devices] Announce for ${ieee} — interview not complete, deferring device_ready to interview completion`);
+      if (!this._state.has(ieee)) this._state.set(ieee, {});
+      if (!this._availability.has(ieee)) this._availability.set(ieee, { available: true, last_seen: Date.now() });
+      return;
+    }
+
     // Re-run findByDevice in case it wasn't loaded at startup
     if (!this._definitions.has(ieee)) {
       const definition = await this._resolveDefinition(rawDevice);
@@ -251,7 +265,12 @@ class DeviceManager {
             this.log.info(`[devices] Late definition resolved for ${ieee_address}: ${def.model ?? '?'}`);
             this._definitions.set(ieee_address, def);
             this._rawDevices.set(ieee_address, rawDevice);
-            if (!this._deviceReadyEmitted.has(ieee_address)) {
+            // Only fire device_ready from the late-resolution path when interview
+            // is complete.  Firing before interview completes means herdsman
+            // hasn't yet discovered all endpoints, so the serialised definition
+            // may have an incomplete endpoint map and produce wrong exposes.
+            // onDeviceInterview fires device_ready after successful interview.
+            if (!this._deviceReadyEmitted.has(ieee_address) && rawDevice.interviewCompleted) {
               this._deviceReadyEmitted.add(ieee_address);
               this.emit('device_ready', {
                 device:     this.zigbee.serializeDevice(rawDevice),

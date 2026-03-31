@@ -362,12 +362,23 @@ class Zigbee2HASSCoordinator:
         if not ieee:
             return
 
+        # Never overwrite a valid definition with null.  The add-on can fire
+        # device_ready with definition=null during the device-announce phase
+        # before the interview is complete (modelID not yet known).  If we
+        # already have a real definition cached, keep it.
+        existing = self.devices.get(ieee, {})
+        if definition is None:
+            definition = existing.get("definition")
+
+        # Preserve existing state across re-announces so entities don't
+        # momentarily show "unknown" when a device reconnects.
         self.devices[ieee] = {
             "device":     device,
             "definition": definition,
-            "state":      {},
+            "state":      existing.get("state", {}),
             "available":  True,
         }
+
         exposes  = (definition or {}).get("exposes", [])
         model_id = device.get("model_id") or "?"
         _LOGGER.info(
@@ -386,6 +397,16 @@ class Zigbee2HASSCoordinator:
             via_device=(DOMAIN, "coordinator"),
             sw_version=device.get("software_build_id"),
         )
+
+        # If we still have no definition (interview not yet complete), don't
+        # fire the HA entity-creation event.  The add-on will fire another
+        # device_ready once the interview succeeds and we have real exposes.
+        if definition is None:
+            _LOGGER.debug(
+                "Device ready with no definition for %s — deferring entity creation to interview completion",
+                ieee,
+            )
+            return
 
         # Fire event so platforms can add new entities at runtime
         self.hass.bus.fire(f"{DOMAIN}_device_ready", {
