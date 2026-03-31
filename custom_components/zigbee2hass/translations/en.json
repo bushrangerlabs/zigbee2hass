@@ -94,5 +94,16 @@
       "name": "Restart Add-on",
       "description": "Restart the Zigbee controller in the add-on."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Zigbee2HASS Settings",
+        "description": "Configure integration behaviour.",
+        "data": {
+          "watchdog_interval": "Entity watchdog interval (minutes)"
+        }
+      }
+    }
   }
 }

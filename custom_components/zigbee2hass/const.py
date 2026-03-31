@@ -33,3 +33,7 @@ EXPOSE_CLIMATE  = "climate"
 EXPOSE_LOCK     = "lock"
 EXPOSE_FAN      = "fan"
 EXPOSE_COMPOSITE = "composite"
+
+# Entity watchdog settings
+CONF_WATCHDOG_INTERVAL    = "watchdog_interval"
+DEFAULT_WATCHDOG_INTERVAL = 10   # minutes

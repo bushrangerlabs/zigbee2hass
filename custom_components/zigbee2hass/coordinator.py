@@ -17,8 +17,11 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 
 from .const import (
+    CONF_WATCHDOG_INTERVAL,
+    DEFAULT_WATCHDOG_INTERVAL,
     DOMAIN,
     TOPIC_BRIDGE_DEVICES,
     TOPIC_BRIDGE_STATE,
@@ -63,6 +66,7 @@ class Zigbee2HASSCoordinator:
 
         # Set when the first bridge/devices snapshot arrives
         self._snapshot_event: asyncio.Event | None = None
+        self._watchdog_task:  asyncio.Task  | None = None
 
         self._client = Zigbee2HASSClient(
             host=host,
@@ -94,7 +98,16 @@ class Zigbee2HASSCoordinator:
         except asyncio.TimeoutError:
             _LOGGER.warning("Device snapshot not received within 30s; continuing with empty device list")
 
+        # Start periodic entity watchdog (30 s initial delay to let all platforms subscribe)
+        self._watchdog_task = self.hass.async_create_task(
+            self._run_entity_watchdog(),
+            name="zigbee2hass_entity_watchdog",
+        )
+
     async def async_stop(self) -> None:
+        if self._watchdog_task:
+            self._watchdog_task.cancel()
+            self._watchdog_task = None
         await self._client.stop()
 
     # ── Subscriptions ─────────────────────────────────────────────────────
@@ -421,6 +434,110 @@ class Zigbee2HASSCoordinator:
             "friendly_name": device.get("friendly_name"),
             "entry_id":     self.entry.entry_id,
         })
+
+    # ── Entity watchdog ───────────────────────────────────────────────────
+
+    async def _run_entity_watchdog(self) -> None:
+        """Periodic task: ensure every device with a definition has HA entities;
+        also remove orphaned HA entities for devices no longer in the network.
+        """
+        # Wait before first check so all platforms have time to subscribe and
+        # process the initial snapshot before we declare anything missing.
+        await asyncio.sleep(30)
+        while True:
+            try:
+                await self._check_entities()
+            except Exception as exc:  # noqa: BLE001
+                _LOGGER.error("Entity watchdog error: %s", exc)
+            interval_min = self.entry.options.get(
+                CONF_WATCHDOG_INTERVAL, DEFAULT_WATCHDOG_INTERVAL
+            )
+            _LOGGER.debug("Entity watchdog sleeping for %d minutes", interval_min)
+            await asyncio.sleep(interval_min * 60)
+
+    async def _check_entities(self) -> None:
+        """Core watchdog logic — called by the periodic task and the panel's Run Now button."""
+        ent_reg = er.async_get(self.hass)
+        dev_reg = dr.async_get(self.hass)
+        repaired = 0
+        removed  = 0
+
+        # 1. Devices with a definition but zero entities → re-fire device_ready
+        for ieee, data in list(self.devices.items()):
+            if ieee == "coordinator":
+                continue
+            if not data.get("definition"):
+                continue
+            ha_device = dev_reg.async_get_device(identifiers={(DOMAIN, ieee)})
+            if not ha_device:
+                continue
+            our_entities = [
+                e
+                for e in er.async_entries_for_device(
+                    ent_reg, ha_device.id, include_disabled_entities=True
+                )
+                if e.platform == DOMAIN
+            ]
+            if not our_entities:
+                _LOGGER.warning(
+                    "Watchdog: %s has a definition but no HA entities — re-creating",
+                    ieee,
+                )
+                self.hass.bus.fire(f"{DOMAIN}_device_ready", {
+                    "entry_id":     self.entry.entry_id,
+                    "ieee_address": ieee,
+                })
+                repaired += 1
+
+        # 2. Remove orphaned HA entities (device left the network)
+        for entry in list(ent_reg.entities.values()):
+            if entry.platform != DOMAIN:
+                continue
+            if entry.config_entry_id != self.entry.entry_id:
+                continue
+            if not entry.device_id:
+                continue
+            ha_device = dev_reg.async_get(entry.device_id)
+            if not ha_device:
+                continue
+            ieee = next(
+                (idf[1] for idf in ha_device.identifiers if idf[0] == DOMAIN),
+                None,
+            )
+            if ieee and ieee not in self.devices:
+                _LOGGER.info(
+                    "Watchdog: removing orphaned entity %s (device %s left network)",
+                    entry.entity_id, ieee,
+                )
+                ent_reg.async_remove(entry.entity_id)
+                removed += 1
+
+        if repaired or removed:
+            _LOGGER.info(
+                "Watchdog complete: repaired=%d  orphans_removed=%d", repaired, removed
+            )
+        else:
+            _LOGGER.debug("Watchdog complete: all devices healthy")
+
+    async def async_repair_device(self, ieee_address: str) -> dict:
+        """Force entity (re)creation for one device — called from the panel."""
+        data = self.devices.get(ieee_address)
+        if not data:
+            return {"error": "device_not_found"}
+        if not data.get("definition"):
+            return {"error": "no_definition"}
+        self.hass.bus.fire(f"{DOMAIN}_device_ready", {
+            "entry_id":     self.entry.entry_id,
+            "ieee_address": ieee_address,
+        })
+        return {"repaired": True}
+
+    async def async_run_watchdog(self) -> dict:
+        """Trigger an immediate watchdog check — called from the panel."""
+        await self._check_entities()
+        return {"ok": True}
+
+    # ─────────────────────────────────────────────────────────────────────────
 
     def _dispatch_device(self, ieee_address: str) -> None:
         """Notify all subscribers watching a specific device."""

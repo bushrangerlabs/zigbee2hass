@@ -705,6 +705,7 @@ class Zigbee2HASSPanel extends HTMLElement {
         <button class="tab-btn" data-tab="map"><ha-icon icon="mdi:map-marker-path" style="width:18px;height:18px;vertical-align:middle"></ha-icon> Network Map</button>
         <button class="tab-btn" data-tab="groups"><ha-icon icon="mdi:account-group" style="width:18px;height:18px;vertical-align:middle"></ha-icon> Groups</button>
         <button class="tab-btn" data-tab="tools"><ha-icon icon="mdi:tools" style="width:18px;height:18px;vertical-align:middle"></ha-icon> Tools</button>
+        <button class="tab-btn" data-tab="settings"><ha-icon icon="mdi:cog" style="width:18px;height:18px;vertical-align:middle"></ha-icon> Settings</button>
       </div>
 
       <div id="pj-banner-container" style="display:none"></div>
@@ -1000,9 +1001,10 @@ class Zigbee2HASSPanel extends HTMLElement {
   _renderTabContent() {
     const tab = this._activeTab ?? 'devices';
     if (tab === 'devices') this._renderDevices();
-    else if (tab === 'map')    this._renderNetworkMap();
-    else if (tab === 'groups') this._renderGroups();
-    else if (tab === 'tools')  this._renderTools();
+    else if (tab === 'map')      this._renderNetworkMap();
+    else if (tab === 'groups')   this._renderGroups();
+    else if (tab === 'tools')    this._renderTools();
+    else if (tab === 'settings') this._renderSettings();
   }
 
   _updateBridgeStatus() {
@@ -1063,6 +1065,7 @@ class Zigbee2HASSPanel extends HTMLElement {
         if (action === 'configure')    this._configureDevice(ieee, el);
         if (action === 'ota')          this._otaCheck(ieee, el);
         if (action === 'remove')       this._removeDevice(ieee);
+        if (action === 'repair')       this._repairDevice(ieee, el);
         if (action === 'rename-start') this._startRename(ieee);
       });
     });
@@ -1143,6 +1146,7 @@ class Zigbee2HASSPanel extends HTMLElement {
           <button class="btn-ghost btn-sm" data-action="ping" data-ieee="${ieee}" title="Ping device">Ping</button>
           <button class="btn-ghost btn-sm" data-action="configure" data-ieee="${ieee}" title="Reconfigure attribute reporting">⚙ Configure</button>
           ${d.definition?.supports_ota ? `<button class="btn-ghost btn-sm" data-action="ota" data-ieee="${ieee}" title="Check for OTA firmware update">⬆ OTA</button>` : ''}
+          <button class="btn-ghost btn-sm" data-action="repair" data-ieee="${ieee}" title="Recreate HA entities for this device">🔧 Repair</button>
           <button class="btn-danger btn-sm" data-action="remove" data-ieee="${ieee}" title="Remove device">Remove</button>
         </div>
       </div>`;
@@ -1709,6 +1713,86 @@ class Zigbee2HASSPanel extends HTMLElement {
         b.disabled = false; b.textContent = 'Backup Now';
       }
     });
+  }
+
+  // ── Settings ───────────────────────────────────────────────────────────────
+
+  _renderSettings() {
+    const content = this.shadowRoot.getElementById('content');
+    content.innerHTML = `
+      <div class="tools-grid">
+        <div class="tool-card">
+          <h3>🔧 Entity Watchdog</h3>
+          <p>Periodically checks that every device has its HA entities. Missing entities are automatically recreated. Entities for devices that have left the network are removed.</p>
+          <label style="display:flex;align-items:center;gap:8px;margin-bottom:14px;font-size:0.9rem">
+            Interval&nbsp;(minutes):
+            <input type="number" id="watchdog-interval" min="1" max="1440" value="10"
+                   style="width:72px;padding:4px 6px;border:1px solid var(--divider-color,#e0e0e0);border-radius:4px;background:var(--card-background-color);color:var(--primary-text-color)">
+          </label>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn-primary" id="btn-save-settings">Save</button>
+            <button class="btn-ghost"   id="btn-run-watchdog">Run&nbsp;Now</button>
+          </div>
+          <div class="tool-result" id="settings-result" style="margin-top:10px"></div>
+        </div>
+      </div>`;
+
+    // Populate current value
+    this._hass.callWS({ type: 'zigbee2hass/get_settings' }).then(res => {
+      const el = content.querySelector('#watchdog-interval');
+      if (el) el.value = res.watchdog_interval ?? 10;
+    }).catch(() => {});
+
+    content.querySelector('#btn-save-settings')?.addEventListener('click', async () => {
+      const btn      = content.querySelector('#btn-save-settings');
+      const resEl    = content.querySelector('#settings-result');
+      const interval = parseInt(content.querySelector('#watchdog-interval')?.value, 10);
+      if (!interval || interval < 1 || interval > 1440) {
+        resEl.textContent = '⚠ Interval must be between 1 and 1440 minutes';
+        return;
+      }
+      btn.disabled = true; btn.textContent = '…';
+      try {
+        await this._hass.callWS({ type: 'zigbee2hass/set_settings', watchdog_interval: interval });
+        resEl.textContent = `✓ Saved — watchdog will run every ${interval} min`;
+        this._showToast('Settings saved');
+      } catch (err) {
+        resEl.textContent = '⚠ ' + (err.message ?? String(err));
+      } finally {
+        btn.disabled = false; btn.textContent = 'Save';
+      }
+    });
+
+    content.querySelector('#btn-run-watchdog')?.addEventListener('click', async () => {
+      const btn   = content.querySelector('#btn-run-watchdog');
+      const resEl = content.querySelector('#settings-result');
+      btn.disabled = true; btn.textContent = '…';
+      try {
+        await this._hass.callWS({ type: 'zigbee2hass/run_watchdog' });
+        resEl.textContent = '✓ Watchdog check complete — see HA logs for details';
+        this._showToast('Watchdog check complete');
+      } catch (err) {
+        resEl.textContent = '⚠ ' + (err.message ?? String(err));
+        this._showToast('Watchdog failed: ' + (err.message ?? err));
+      } finally {
+        btn.disabled = false; btn.textContent = 'Run\u00a0Now';
+      }
+    });
+  }
+
+  async _repairDevice(ieee, btn) {
+    const orig = btn.textContent;
+    btn.disabled = true; btn.textContent = '…';
+    try {
+      await this._hass.callWS({ type: 'zigbee2hass/repair_device', ieee_address: ieee });
+      this._showToast('Repair triggered for ' + ieee);
+      // Reload device list after a short delay so new entities appear
+      setTimeout(() => this._fullLoad(), 1500);
+    } catch (err) {
+      this._showToast('Repair failed: ' + (err.message ?? err));
+    } finally {
+      btn.disabled = false; btn.textContent = orig;
+    }
   }
 
   // ── Utilities ─────────────────────────────────────────────────────────────

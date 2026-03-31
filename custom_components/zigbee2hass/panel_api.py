@@ -11,7 +11,7 @@ import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 
-from .const import DOMAIN
+from .const import CONF_WATCHDOG_INTERVAL, DEFAULT_WATCHDOG_INTERVAL, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -32,6 +32,10 @@ def async_register_panel_api(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_add_group_member)
     websocket_api.async_register_command(hass, ws_remove_group_member)
     websocket_api.async_register_command(hass, ws_ota_check)
+    websocket_api.async_register_command(hass, ws_repair_device)
+    websocket_api.async_register_command(hass, ws_get_settings)
+    websocket_api.async_register_command(hass, ws_set_settings)
+    websocket_api.async_register_command(hass, ws_run_watchdog)
 
 
 def _get_coordinator(hass: HomeAssistant, connection, msg_id: int):
@@ -345,4 +349,91 @@ async def ws_ota_check(
     if not coordinator:
         return
     result = await coordinator.async_ota_check(msg["ieee_address"])
+    connection.send_result(msg["id"], result)
+
+
+# ── repair_device ──────────────────────────────────────────────────────────────────────
+
+@websocket_api.websocket_command({
+    "type": "zigbee2hass/repair_device",
+    vol.Required("ieee_address"): str,
+})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_repair_device(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    """Force entity (re)creation for one device."""
+    coordinator = _get_coordinator(hass, connection, msg["id"])
+    if not coordinator:
+        return
+    result = await coordinator.async_repair_device(msg["ieee_address"])
+    if "error" in result:
+        connection.send_error(msg["id"], result["error"], result["error"])
+        return
+    connection.send_result(msg["id"], result)
+
+
+# ── get_settings ───────────────────────────────────────────────────────────────────────
+
+@websocket_api.websocket_command({"type": "zigbee2hass/get_settings"})
+@websocket_api.async_response
+async def ws_get_settings(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    """Return current integration settings."""
+    coordinator = _get_coordinator(hass, connection, msg["id"])
+    if not coordinator:
+        return
+    connection.send_result(msg["id"], {
+        "watchdog_interval": coordinator.entry.options.get(
+            CONF_WATCHDOG_INTERVAL, DEFAULT_WATCHDOG_INTERVAL
+        ),
+    })
+
+
+# ── set_settings ───────────────────────────────────────────────────────────────────────
+
+@websocket_api.websocket_command({
+    "type": "zigbee2hass/set_settings",
+    vol.Required("watchdog_interval"): vol.All(int, vol.Range(min=1, max=1440)),
+})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_set_settings(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    """Persist integration settings without requiring a reload."""
+    coordinator = _get_coordinator(hass, connection, msg["id"])
+    if not coordinator:
+        return
+    new_interval = msg["watchdog_interval"]
+    hass.config_entries.async_update_entry(
+        coordinator.entry,
+        options={**coordinator.entry.options, CONF_WATCHDOG_INTERVAL: new_interval},
+    )
+    connection.send_result(msg["id"], {"watchdog_interval": new_interval})
+
+
+# ── run_watchdog ─────────────────────────────────────────────────────────────────────
+
+@websocket_api.websocket_command({"type": "zigbee2hass/run_watchdog"})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_run_watchdog(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    """Trigger an immediate entity watchdog check."""
+    coordinator = _get_coordinator(hass, connection, msg["id"])
+    if not coordinator:
+        return
+    result = await coordinator.async_run_watchdog()
     connection.send_result(msg["id"], result)
