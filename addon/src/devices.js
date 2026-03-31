@@ -236,6 +236,19 @@ class DeviceManager {
     // We only need to supply the 'meta' argument (converter context).
     const rawDevice = this._rawDevices.get(ieee_address);
 
+    // Build endpoint name → ID map so fromZigbee converters can produce
+    // endpoint-specific state keys (e.g. state_left, state_right) for
+    // multi-endpoint devices such as the TS0003 3-gang switch.
+    // Without endpoint_name in meta the converter emits a bare 'state' key
+    // for every endpoint, causing all switch entities to toggle together.
+    const endpointNameMap = typeof definition.endpoint === 'function'
+      ? (definition.endpoint(rawDevice) ?? {})
+      : {};
+    // Reverse-lookup: endpoint ID → endpoint name
+    const endpointName = endpoint_id != null
+      ? (Object.entries(endpointNameMap).find(([, id]) => id === endpoint_id)?.[0] ?? null)
+      : null;
+
     // Some ZHC v25 fromZigbee converters destructure 'publish' from meta
     // (or shadow the positional publish arg with meta.publish). Provide a real
     // publish function so converters can push intermediate state updates.
@@ -248,12 +261,13 @@ class DeviceManager {
     };
 
     const meta = {
-      device:   rawDevice,
-      endpoint: msg.endpoint,  // raw Endpoint (already in normalized msg)
-      logger:   this.log,
-      state:    this._state.get(ieee_address) ?? {},
-      options:  {},
-      publish:  publishState,
+      device:        rawDevice,
+      endpoint:      msg.endpoint,  // raw Endpoint (already in normalized msg)
+      endpoint_name: endpointName,  // e.g. 'left' for TS0003 endpoint 1
+      logger:        this.log,
+      state:         this._state.get(ieee_address) ?? {},
+      options:       {},
+      publish:       publishState,
     };
 
     // Run through converters to get state
