@@ -446,7 +446,7 @@ class DeviceManager {
       try {
         let converterRan = false;
 
-        for (const { baseKey, value, endpointId } of items) {
+        for (const { baseKey, value, endpointId, rawKey } of items) {
           // Resolve the endpoint for this key
           const ep = endpointId != null
             ? (rawDevice.getEndpoint(endpointId) ?? rawDevice.endpoints[0])
@@ -463,6 +463,28 @@ class DeviceManager {
             continue;
           }
 
+          // Lookup the endpoint name (e.g. 'left') for this endpoint ID.
+          // ZHC v25 converters use meta.endpoint_name to build endpoint-specific
+          // state keys (e.g. for toggle: state${_left}).
+          const endpointName = endpointId != null
+            ? (Object.entries(endpointNameMap).find(([, id]) => id === endpointId)?.[0] ?? null)
+            : null;
+
+          // Wrap publishFn to remap base-key results back to the original raw key
+          // so optimistic state updates stay endpoint-specific.
+          // e.g. converter emits {state: 'ON'} → we publish {state_left: 'ON'}
+          // preventing the update from bleeding into all endpoint entities.
+          const epPublishFn = endpointName != null
+            ? (partialState) => {
+                if (!partialState || typeof partialState !== 'object') return;
+                const remapped = {};
+                for (const [k, v] of Object.entries(partialState)) {
+                  remapped[k === baseKey ? rawKey : k] = v;
+                }
+                publishFn(remapped);
+              }
+            : publishFn;
+
           // Some ZHC v25 converters read meta.message[baseKey] directly (not the
           // value parameter). For endpoint-remapped keys (e.g. state_left→state)
           // we must ensure meta.message also contains the base key so the
@@ -472,14 +494,15 @@ class DeviceManager {
             : payload;
 
           const meta = {
-            message: normalizedMessage,
-            mapped:  definition,
-            endpoint: ep,
-            device:  rawDevice,
-            logger:  this.log,
-            state:   this._state.get(ieee_address) ?? {},
-            options: {},
-            publish: publishFn,
+            message:       normalizedMessage,
+            mapped:        definition,
+            endpoint_name: endpointName,
+            endpoint:      ep,
+            device:        rawDevice,
+            logger:        this.log,
+            state:         this._state.get(ieee_address) ?? {},
+            options:       {},
+            publish:       epPublishFn,
           };
 
           const result = await converter.convertSet(ep, baseKey, value, meta);
@@ -488,8 +511,9 @@ class DeviceManager {
           if (result?.readAfterWriteTime) {
             await new Promise(r => setTimeout(r, result.readAfterWriteTime));
           }
-          // Apply state returned by the converter as optimistic update
-          if (result?.state) { publishFn(result.state); }
+          // Apply state returned by the converter as optimistic update,
+          // remapping base key back to the endpoint-specific raw key.
+          if (result?.state) { epPublishFn(result.state); }
         }
 
         if (!converterRan) {
