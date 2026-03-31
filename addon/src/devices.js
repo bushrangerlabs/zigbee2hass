@@ -463,8 +463,16 @@ class DeviceManager {
             continue;
           }
 
+          // Some ZHC v25 converters read meta.message[baseKey] directly (not the
+          // value parameter). For endpoint-remapped keys (e.g. state_left→state)
+          // we must ensure meta.message also contains the base key so the
+          // converter's validator doesn't receive undefined/null.
+          const normalizedMessage = endpointId != null
+            ? { ...payload, [baseKey]: value }
+            : payload;
+
           const meta = {
-            message: payload,
+            message: normalizedMessage,
             mapped:  definition,
             endpoint: ep,
             device:  rawDevice,

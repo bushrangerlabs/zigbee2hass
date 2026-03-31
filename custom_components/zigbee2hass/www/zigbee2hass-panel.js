@@ -1100,7 +1100,7 @@ class Zigbee2HASSPanel extends HTMLElement {
     const meta       = this._escHtml(metaParts.join(' — '));
     const lastSeen   = d.last_seen ? this._relativeTime(d.last_seen) : '—';
     const iconHtml   = imgUrl
-      ? `<img class="device-img" src="${this._escHtml(imgUrl)}" alt="${icon}"
+      ? `<img class="device-img" src="${this._escHtml(imgUrl)}" alt=""
              onerror="this.style.display='none';this.nextElementSibling.style.display=''">
          <span style="display:none">${icon}</span>`
       : icon;
