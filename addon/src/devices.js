@@ -87,6 +87,30 @@ class DeviceManager {
     const loadedCount = this._definitions.size;
     this.log.info(`[devices] DeviceManager started — ${loadedCount} device(s) loaded from database`);
 
+    // Run configure() for all already-paired mains-powered devices.
+    // Tuya devices (TS0003 etc.) need a "magic packet" genBasic read on every
+    // coordinator startup to trigger proper per-endpoint attribute reporting.
+    // Without this, some Tuya devices report ALL endpoints together instead of
+    // only the changed endpoint, causing all gangs to appear to toggle at once.
+    // We fire these in the background so startup is not blocked.
+    const coordEp = this.zigbee.getCoordinatorEndpoint();
+    for (const { rawDevice, definition } of resolved) {
+      if (!definition || typeof definition.configure !== 'function') continue;
+      // Skip battery-powered end devices — they're likely asleep
+      const isMainsPowered = rawDevice.powerSource === 'Mains (single phase)'
+                          || rawDevice.powerSource === 'Mains (3 phase)';
+      if (!isMainsPowered) continue;
+      const ieee = rawDevice.ieeeAddr;
+      (async () => {
+        try {
+          await definition.configure(rawDevice, coordEp, definition);
+          this.log.info(`[devices] Startup configure for ${ieee} succeeded`);
+        } catch (err) {
+          this.log.debug(`[devices] Startup configure for ${ieee} skipped: ${err.message}`);
+        }
+      })();
+    }
+
     // Start availability polling for mains-powered devices
     this._availabilityTimer = setInterval(
       () => this._checkAvailability(),
@@ -183,6 +207,18 @@ class DeviceManager {
       },
       definition: definition ? this._serializeDefinition(definition, rawDevice) : null,
     });
+
+    // Run configure() after interview — same as onDeviceAnnounce, needed so
+    // e.g. Tuya magic packet is sent as soon as the device is interviewed.
+    if (definition && typeof definition.configure === 'function') {
+      try {
+        const coordEp = this.zigbee.getCoordinatorEndpoint();
+        await definition.configure(rawDevice, coordEp, definition);
+        this.log.info(`[devices] Post-interview configure succeeded for ${rawDevice.ieeeAddr}`);
+      } catch (err) {
+        this.log.debug(`[devices] Post-interview configure skipped for ${rawDevice.ieeeAddr}: ${err.message}`);
+      }
+    }
   }
 
   /**
@@ -278,10 +314,24 @@ class DeviceManager {
       const clusters = Array.isArray(converter.cluster) ? converter.cluster : [converter.cluster];
       if (!clusters.includes(cluster)) continue;
 
+      // Filter by message type — mirrors zigbee2mqtt receive.ts behaviour.
+      // Without this, converters built for 'commandOn'/'commandOff' also fire
+      // on 'attributeReport' messages and vice-versa.
+      if (converter.type) {
+        const types = Array.isArray(converter.type) ? converter.type : [converter.type];
+        if (!types.includes(msg.type)) continue;
+      }
+
+      // Pass device options from the definition (e.g. disableDefaultResponse)
+      // so converters that read options behave the same as in zigbee2mqtt.
+      const options = definition.options
+        ? Object.fromEntries((definition.options ?? []).map(o => [o.name, o.default ?? undefined]))
+        : {};
+
       try {
         // Pass publishState as both positional publish arg AND meta.publish so
         // converters find it regardless of which calling convention they use.
-        const result = converter.convert(definition, msg, publishState, {}, meta);
+        const result = converter.convert(definition, msg, publishState, options, meta);
         if (result) Object.assign(stateUpdate, result);
       } catch (err) {
         this.log.debug(`[devices] Converter error for ${ieee_address}: ${err.message}`);
