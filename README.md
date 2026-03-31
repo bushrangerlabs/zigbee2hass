@@ -1,5 +1,9 @@
 # Zigbee2HASS
 
+***Important Note - This is incomplete and should not installed
+
+
+
 **The reliable Zigbee integration for Home Assistant — powered by zigbee-herdsman. No MQTT required.**
 
 [![HA Add-on](https://img.shields.io/badge/Home%20Assistant-Add--on-blue)](https://www.home-assistant.io/addons)
