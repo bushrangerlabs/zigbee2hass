@@ -1,5 +1,7 @@
 'use strict';
 
+const fs        = require('fs');
+const path      = require('path');
 const zhc       = require('zigbee-herdsman-converters');
 const { getLogger } = require('./logger');
 
@@ -43,12 +45,18 @@ class DeviceManager {
     /** @type {Map<string, NodeJS.Timeout>} "ieee:property" → reset timer for auto-clearing binary states */
     this._occupancyTimers = new Map();
 
-    this._availabilityTimer = null;
+    this._availabilityTimer  = null;
+    this._statePersistTimer  = null;
+    this._stateFile = path.join(config.data_dir ?? '/data', 'device_state.json');
   }
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
   async start() {
+    // Restore state from previous session so entities immediately show their
+    // last-known values after an add-on restart instead of going "unknown".
+    this._loadPersistedState();
+
     // Load definitions for already-paired devices from herdsman database
     // findByDevice is async in zhc v25 — resolve all in parallel for speed
     const rawDevices = this.zigbee.getRawDevices().filter(d => d.type !== 'Coordinator');
@@ -275,6 +283,7 @@ class DeviceManager {
     const current = this._state.get(ieee_address) ?? {};
     const next    = { ...current, ...stateUpdate };
     this._state.set(ieee_address, next);
+    this._schedulePersistState();
 
     this.emit('state_changed', { ieee_address, state: stateUpdate, full_state: next });
 
@@ -321,6 +330,7 @@ class DeviceManager {
     this._definitions.delete(ieee_address);
     this._rawDevices.delete(ieee_address);
     this._state.delete(ieee_address);
+    this._schedulePersistState();
     this._availability.delete(ieee_address);
     this._deviceReadyEmitted.delete(ieee_address);
     // Clear any pending occupancy reset timers for this device
@@ -350,6 +360,43 @@ class DeviceManager {
     await definition.configure(rawDevice, coordEp, definition);
     this.log.info(`[devices] Reconfigured attribute reporting for ${ieee_address}`);
     return { configured: true };
+  }
+
+  // ── State persistence ─────────────────────────────────────────────────────
+
+  _loadPersistedState() {
+    try {
+      if (fs.existsSync(this._stateFile)) {
+        const raw = JSON.parse(fs.readFileSync(this._stateFile, 'utf8'));
+        let count = 0;
+        for (const [ieee, state] of Object.entries(raw ?? {})) {
+          if (typeof state === 'object' && state !== null) {
+            // Only seed if not yet populated (herdsman DB takes precedence for empty objects)
+            this._state.set(ieee, state);
+            count++;
+          }
+        }
+        this.log.info(`[devices] Loaded persisted state for ${count} device(s) from ${this._stateFile}`);
+      }
+    } catch (e) {
+      this.log.warn(`[devices] Could not load persisted state: ${e.message}`);
+    }
+  }
+
+  _schedulePersistState() {
+    if (this._statePersistTimer) return;
+    this._statePersistTimer = setTimeout(() => {
+      this._statePersistTimer = null;
+      try {
+        const obj = {};
+        for (const [ieee, state] of this._state) {
+          obj[ieee] = state;
+        }
+        fs.writeFileSync(this._stateFile, JSON.stringify(obj, null, 2), 'utf8');
+      } catch (e) {
+        this.log.warn(`[devices] Could not persist state: ${e.message}`);
+      }
+    }, 2000); // debounce: coalesce rapid updates into one write
   }
 
   // ── State access ──────────────────────────────────────────────────────────
@@ -437,6 +484,7 @@ class DeviceManager {
       const cur  = this._state.get(ieee_address) ?? {};
       const next = { ...cur, ...partialState };
       this._state.set(ieee_address, next);
+      this._schedulePersistState();
       this.emit('state_changed', { ieee_address, state: partialState, full_state: next });
     };
 
