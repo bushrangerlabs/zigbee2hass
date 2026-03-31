@@ -394,8 +394,9 @@ class Zigbee2HASSPanel extends HTMLElement {
         /* ── Action row ── */
         .actions {
           display: flex;
-          gap: 8px;
+          gap: 6px;
           margin-top: 4px;
+          flex-wrap: wrap;
         }
 
         /* ── Last action chip ── */
@@ -1143,11 +1144,11 @@ class Zigbee2HASSPanel extends HTMLElement {
         </div>
         ${entityHtml}
         <div class="actions">
-          <button class="btn-ghost btn-sm" data-action="ping" data-ieee="${ieee}" title="Ping device">Ping</button>
-          <button class="btn-ghost btn-sm" data-action="configure" data-ieee="${ieee}" title="Reconfigure attribute reporting">⚙ Configure</button>
-          ${d.definition?.supports_ota ? `<button class="btn-ghost btn-sm" data-action="ota" data-ieee="${ieee}" title="Check for OTA firmware update">⬆ OTA</button>` : ''}
-          <button class="btn-ghost btn-sm" data-action="repair" data-ieee="${ieee}" title="Recreate HA entities for this device">🔧 Repair</button>
-          <button class="btn-danger btn-sm" data-action="remove" data-ieee="${ieee}" title="Remove device">Remove</button>
+          <button class="btn-ghost btn-sm" data-action="ping"      data-ieee="${ieee}" title="Ping device">Ping</button>
+          <button class="btn-ghost btn-sm" data-action="configure" data-ieee="${ieee}" title="Reconfigure attribute reporting">Configure</button>
+          ${d.definition?.supports_ota ? `<button class="btn-ghost btn-sm" data-action="ota" data-ieee="${ieee}" title="Check for OTA firmware update">OTA</button>` : ''}
+          <button class="btn-ghost btn-sm" data-action="repair"    data-ieee="${ieee}" title="Recreate HA entities for this device">Repair</button>
+          <button class="btn-danger btn-sm" data-action="remove"   data-ieee="${ieee}" title="Remove device">Remove</button>
         </div>
       </div>`;
   }
