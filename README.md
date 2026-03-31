@@ -1,6 +1,13 @@
 # Zigbee2HASS
+
 > [!WARNING]
-***Important Note - This is incomplete and should not installed
+> ## Work In Progress — Do Not Use
+>
+> **This project is incomplete and is not ready for use.**
+>
+> It is under active development and **will** have bugs, missing features, breaking changes, and may cause instability in your Home Assistant instance or Zigbee network. There is no support provided at this stage.
+>
+> **Do not install this on any Home Assistant instance you rely on.**
 
 
 
