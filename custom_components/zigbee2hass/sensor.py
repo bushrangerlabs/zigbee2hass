@@ -1,6 +1,8 @@
 """Sensor platform for Zigbee2HASS."""
 from __future__ import annotations
 
+import logging
+
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
@@ -14,6 +16,8 @@ from .const import DOMAIN
 from .coordinator import Zigbee2HASSCoordinator
 from .entity import Zigbee2HASSEntity
 from .entity_factory import exposes_to_platforms
+
+_LOGGER = logging.getLogger(__name__)
 
 # Use string literals for all units — avoids import churn as HA reorganises
 # its unit enums across versions. The string values are stable.
@@ -49,6 +53,14 @@ async def async_setup_entry(
         exposes     = definition.get("exposes", [])
         platforms   = exposes_to_platforms(exposes)
 
+        _LOGGER.debug(
+            "[sensor] _add_for_device %s: definition=%s exposes=%d sensor_matches=%d",
+            ieee_address,
+            definition.get("model") or ("present" if definition else "MISSING"),
+            len(exposes),
+            len(platforms.get("sensor", [])),
+        )
+
         entities = []
         for expose in platforms.get("sensor", []):
             uid = f"{ieee_address}_sensor_{expose.get('name', expose.get('property', 'unknown'))}"
@@ -57,6 +69,10 @@ async def async_setup_entry(
                 entities.append(Zigbee2HASSensor(coordinator, ieee_address, expose))
 
         if entities:
+            _LOGGER.info(
+                "Adding %d sensor entity(s) for %s (model=%s)",
+                len(entities), ieee_address, definition.get("model", "?"),
+            )
             async_add_entities(entities)
 
     for ieee_address in coordinator.devices:

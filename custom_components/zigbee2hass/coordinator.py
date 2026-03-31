@@ -86,13 +86,13 @@ class Zigbee2HASSCoordinator:
         else:
             raise ConnectionError(f"Timed out waiting for connection to Zigbee2HASS add-on at {self.host}:{self.port}")
 
-        # Wait up to 10s for the device snapshot to arrive so coordinator.devices
+        # Wait up to 30s for the device snapshot to arrive so coordinator.devices
         # is populated before platform async_setup_entry iterates it.
         try:
-            await asyncio.wait_for(self._snapshot_event.wait(), timeout=10.0)
+            await asyncio.wait_for(self._snapshot_event.wait(), timeout=30.0)
             _LOGGER.debug("Device snapshot received — %d devices", len(self.devices))
         except asyncio.TimeoutError:
-            _LOGGER.warning("Device snapshot not received within 10s; continuing with empty device list")
+            _LOGGER.warning("Device snapshot not received within 30s; continuing with empty device list")
 
     async def async_stop(self) -> None:
         await self._client.stop()

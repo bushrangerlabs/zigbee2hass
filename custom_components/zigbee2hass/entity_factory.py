@@ -104,7 +104,9 @@ def get_device_info(device: dict, coordinator_name: str = "Zigbee2HASS") -> dict
         "name":           device.get("model_id") or device["ieee_address"],
         "manufacturer":   device.get("manufacturer"),
         "model":          device.get("model_id"),
-        "via_device":     ("zigbee2hass", coordinator_name),
+        # "coordinator" matches the identifier used in __init__.py for the bridge
+        # device — this establishes the device hierarchy in HA.
+        "via_device":     ("zigbee2hass", "coordinator"),
         "sw_version":     None,
     }
 

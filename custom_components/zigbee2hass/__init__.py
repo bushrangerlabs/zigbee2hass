@@ -76,6 +76,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.error("Zigbee2HASS platform setup failed — %s", exc, exc_info=True)
         raise ConfigEntryNotReady(f"Platform setup failed: {exc}") from exc
 
+    # After ALL platforms have finished their async_setup_entry calls, fire a
+    # final devices_loaded event.  This is the definitive fix for the race
+    # condition where the bridge/devices snapshot arrives (and the first
+    # devices_loaded fires) while platforms are still setting up and their
+    # event listeners haven't been registered yet.  By this point all listeners
+    # are registered and the per-platform 'added' dedup set prevents doubles.
+    if coordinator.devices:
+        _LOGGER.info(
+            "Post-setup devices_loaded for %d device(s) — ensuring entity creation",
+            len(coordinator.devices),
+        )
+        hass.bus.fire(f"{DOMAIN}_devices_loaded", {"entry_id": entry.entry_id})
+
     try:
         async_register_services(hass)
     except Exception as exc:
