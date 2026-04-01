@@ -800,6 +800,20 @@ class Zigbee2HASSPanel extends HTMLElement {
       this._loading = false;
       this._error   = err.message ?? String(err);
     }
+
+    // Ensure a persistent subscription to pairing events is alive for the
+    // element's entire lifetime — not just while the modal is open.  This
+    // guarantees we hear device_ready even if it fires after the modal was
+    // closed (interview can take 30+ seconds after the user hits Stop/Hide).
+    if (!this._pairingUnsub) {
+      try {
+        this._pairingUnsub = await this._hass.connection.subscribeEvents(
+          (event) => this._onPairingEvent(event.data),
+          'zigbee2hass_pairing_event'
+        );
+      } catch (_) { /* non-fatal — panel still works without live events */ }
+    }
+
     this._renderAll();
   }
 
@@ -824,12 +838,8 @@ class Zigbee2HASSPanel extends HTMLElement {
       await this._hass.callWS({ type: 'zigbee2hass/permit_join', permit: true, timeout: 254 });
       this._permitJoin = true;
 
-      // Subscribe to HA bus pairing events for live device list
-      if (this._pairingUnsub) { this._pairingUnsub(); this._pairingUnsub = null; }
-      this._pairingUnsub = await this._hass.connection.subscribeEvents(
-        (event) => this._onPairingEvent(event.data),
-        'zigbee2hass_pairing_event'
-      );
+      // Subscribe to HA bus pairing events — subscription is now managed
+      // by _fullLoad() so no need to create it here.
 
       // Local countdown — keeps UI alive even if permit_join events are delayed
       if (this._pjTimer) clearInterval(this._pjTimer);
@@ -874,8 +884,9 @@ class Zigbee2HASSPanel extends HTMLElement {
   }
 
   async _closePermitJoin(stopNetwork = true) {
-    if (this._pjTimer)    { clearInterval(this._pjTimer); this._pjTimer = null; }
-    if (this._pairingUnsub) { this._pairingUnsub(); this._pairingUnsub = null; }
+    if (this._pjTimer) { clearInterval(this._pjTimer); this._pjTimer = null; }
+    // Do NOT unsubscribe from pairing events here — device_ready can fire
+    // well after the modal closes and we still need to hear it.
     this._hidePairingModal();
     if (stopNetwork) {
       try {
