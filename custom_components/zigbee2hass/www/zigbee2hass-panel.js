@@ -776,9 +776,14 @@ class Zigbee2HASSPanel extends HTMLElement {
 
       // ieee_address → HA device_id
       this._haDeviceMap = {};
+      // ieee_address → human name from HA device registry (name_by_user preferred)
+      this._haDeviceNameMap = {};
       for (const haDev of devReg) {
         for (const [idDomain, idValue] of (haDev.identifiers ?? [])) {
-          if (idDomain === DOMAIN) this._haDeviceMap[idValue] = haDev.id;
+          if (idDomain === DOMAIN) {
+            this._haDeviceMap[idValue]     = haDev.id;
+            this._haDeviceNameMap[idValue] = haDev.name_by_user || haDev.name || null;
+          }
         }
       }
 
@@ -1113,7 +1118,10 @@ class Zigbee2HASSPanel extends HTMLElement {
     const action     = d.state?.action ?? null;
     const vendor     = d.definition?.vendor ?? '';
     const model      = d.definition?.model ?? d.model_id ?? '';
-    const name       = this._escHtml(d.friendly_name ?? d.model_id ?? d.ieee_address);
+    const name = this._escHtml(
+      this._haDeviceNameMap?.[d.ieee_address] ||
+      d.friendly_name ?? d.model_id ?? d.ieee_address
+    );
     const ieee       = this._escHtml(d.ieee_address);
     const incomplete = !d.interview_completed ? '<ha-icon icon="mdi:alert-outline" style="width:16px;height:16px;vertical-align:middle;color:var(--warning-color,orange)"></ha-icon> ' : '';
     const metaParts  = [vendor, model].filter(Boolean);
@@ -1388,9 +1396,10 @@ class Zigbee2HASSPanel extends HTMLElement {
     try {
       await this._hass.callWS({ type: 'zigbee2hass/rename_device', ieee_address: ieee, name });
       this._showToast(`Renamed to "${name}"`);
-      // Update local cache
+      // Update local cache so the card shows the new name immediately
       const dev = this._devices.find(d => d.ieee_address === ieee);
       if (dev) dev.friendly_name = name;
+      if (this._haDeviceNameMap) this._haDeviceNameMap[ieee] = name;
       // Replace input with updated name span
       const safeId  = ieee.replace(/x|:/g, '');
       const nameEl  = document.createElement('div');
