@@ -1119,8 +1119,7 @@ class Zigbee2HASSPanel extends HTMLElement {
     const vendor     = d.definition?.vendor ?? '';
     const model      = d.definition?.model ?? d.model_id ?? '';
     const name = this._escHtml(
-      this._haDeviceNameMap?.[d.ieee_address] ||
-      d.friendly_name ?? d.model_id ?? d.ieee_address
+      (this._haDeviceNameMap?.[d.ieee_address] || d.friendly_name) ?? d.model_id ?? d.ieee_address
     );
     const ieee       = this._escHtml(d.ieee_address);
     const incomplete = !d.interview_completed ? '<ha-icon icon="mdi:alert-outline" style="width:16px;height:16px;vertical-align:middle;color:var(--warning-color,orange)"></ha-icon> ' : '';
