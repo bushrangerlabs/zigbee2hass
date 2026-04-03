@@ -1862,12 +1862,11 @@ class Zigbee2HASSPanel extends HTMLElement {
         const namesText   = namesInput?.files?.[0]    ? await _readText(namesInput.files[0])   : null;
 
         resEl.textContent = 'Uploading…';
-        const r = await this._hass.callWS({
-          type:         'zigbee2hass/z2m_migrate_files',
-          backup_b64:   backupB64,
-          database_b64: databaseB64,
-          names_text:   namesText,
-        });
+        const wsMsg = { type: 'zigbee2hass/z2m_migrate_files' };
+        if (backupB64)   wsMsg.backup_b64   = backupB64;
+        if (databaseB64) wsMsg.database_b64 = databaseB64;
+        if (namesText)   wsMsg.names_text   = namesText;
+        const r = await this._hass.callWS(wsMsg);
         const parts = [];
         if (r.coordinator_backup) parts.push('coordinator backup');
         if (r.database)           parts.push('device database');

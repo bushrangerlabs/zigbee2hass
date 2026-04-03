@@ -470,9 +470,9 @@ async def ws_z2m_migrate(
 
 @websocket_api.websocket_command({
     "type": "zigbee2hass/z2m_migrate_files",
-    vol.Optional("backup_b64"):   str,
-    vol.Optional("database_b64"): str,
-    vol.Optional("names_text"):   str,
+    vol.Optional("backup_b64"):   vol.Any(str, None),
+    vol.Optional("database_b64"): vol.Any(str, None),
+    vol.Optional("names_text"):   vol.Any(str, None),
 })
 @websocket_api.require_admin
 @websocket_api.async_response
