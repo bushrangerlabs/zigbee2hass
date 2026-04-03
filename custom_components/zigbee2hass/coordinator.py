@@ -67,6 +67,9 @@ class Zigbee2HASSCoordinator:
         # Set when the first bridge/devices snapshot arrives
         self._snapshot_event: asyncio.Event | None = None
         self._watchdog_task:  asyncio.Task  | None = None
+        # Device names to apply to the HA device registry after a Z2M migration
+        # (stored across the add-on restart that follows migration)
+        self._pending_names: dict[str, str] = {}
 
         self._client = Zigbee2HASSClient(
             host=host,
@@ -186,6 +189,29 @@ class Zigbee2HASSCoordinator:
 
     async def async_ota_check(self, ieee_address: str) -> dict:
         return await self._client.request("ota_check", {"ieee_address": ieee_address})
+
+    async def async_migrate_z2m(self, z2m_data_dir: str) -> dict:
+        """Run a full Zigbee2MQTT migration.
+
+        The add-on stops its coordinator, copies the Z2M database and NVRam
+        backup into its data directory, then restarts cleanly.  This call
+        returns the migration result and stores device friendly names so they
+        are applied to the HA device registry once the add-on reconnects and
+        sends the fresh device snapshot.
+        """
+        result = await self._client.request(
+            "migrate_z2m", {"z2m_data_dir": z2m_data_dir}, timeout=30.0
+        )
+        # Store names now; they will be applied in _handle_bridge_devices after
+        # the add-on restarts and sends the new device snapshot.
+        device_names: dict[str, str] = result.get("device_names") or {}
+        if device_names:
+            self._pending_names = dict(device_names)
+            _LOGGER.info(
+                "Z2M migration: stored %d device name(s) to apply after reconnect",
+                len(self._pending_names),
+            )
+        return result
 
     # ── Internal callbacks ────────────────────────────────────────────────
 
@@ -329,6 +355,22 @@ class Zigbee2HASSCoordinator:
             # availability / state from the snapshot (fixes entities stuck at
             # 'unavailable' after an add-on restart without integration reload).
             self._dispatch_device(ieee)
+
+        # Apply any pending Z2M migration friendly names to the HA device registry.
+        # These were stored by async_migrate_z2m before the add-on restarted.
+        if self._pending_names:
+            applied = 0
+            for ieee, name in list(self._pending_names.items()):
+                device_entry = dev_reg.async_get_device(identifiers={(DOMAIN, ieee)})
+                if device_entry:
+                    dev_reg.async_update_device(device_entry.id, name_by_user=name)
+                    self._pending_names.pop(ieee)
+                    applied += 1
+            if applied:
+                _LOGGER.info(
+                    "Z2M migration: applied %d friendly name(s) to HA device registry",
+                    applied,
+                )
 
         # Unblock async_start() if it's still waiting
         if self._snapshot_event and not self._snapshot_event.is_set():

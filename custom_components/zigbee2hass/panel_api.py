@@ -36,6 +36,7 @@ def async_register_panel_api(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_get_settings)
     websocket_api.async_register_command(hass, ws_set_settings)
     websocket_api.async_register_command(hass, ws_run_watchdog)
+    websocket_api.async_register_command(hass, ws_z2m_migrate)
 
 
 def _get_coordinator(hass: HomeAssistant, connection, msg_id: int):
@@ -436,4 +437,29 @@ async def ws_run_watchdog(
     if not coordinator:
         return
     result = await coordinator.async_run_watchdog()
+    connection.send_result(msg["id"], result)
+
+
+# ── z2m_migrate ──────────────────────────────────────────────────────────────────────
+
+@websocket_api.websocket_command({
+    "type": "zigbee2hass/z2m_migrate",
+    vol.Required("z2m_data_dir"): str,
+})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_z2m_migrate(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    """Import coordinator backup, device database, and friendly names from a Z2M data dir.
+
+    Stops the Zigbee coordinator, copies the files, then restarts the add-on.
+    Friendly names are stored and applied to the HA device registry after reconnect.
+    """
+    coordinator = _get_coordinator(hass, connection, msg["id"])
+    if not coordinator:
+        return
+    result = await coordinator.async_migrate_z2m(msg["z2m_data_dir"])
     connection.send_result(msg["id"], result)

@@ -80,32 +80,47 @@ class Z2MMigration {
   }
 
   /**
-   * Import Z2M configuration.yaml device friendly names and groups.
-   * Returns a JSON object with device overrides that zigbee2hass can use.
-   * @param {string} z2mConfigPath  - path to Z2M configuration.yaml
+   * Extract device friendly names from a Z2M data directory.
+   * Checks devices.yaml first (newer Z2M), then the devices section of
+   * configuration.yaml.  Uses js-yaml so all YAML quoting styles are handled.
+   * @param {string} z2mDataDir
+   * @returns {object} ieee_address → friendly_name map
    */
-  importDeviceNames(z2mConfigPath) {
-    if (!fs.existsSync(z2mConfigPath)) {
-      this.log.warn(`[migration] Z2M config not found at: ${z2mConfigPath}`);
-      return null;
+  extractDeviceNames(z2mDataDir) {
+    const yaml  = require('js-yaml');
+    const names = {}; // ieee → friendly_name
+
+    // devices.yaml — present when Z2M splits devices into a separate file
+    const devicesYamlPath = path.join(z2mDataDir, 'devices.yaml');
+    if (fs.existsSync(devicesYamlPath)) {
+      try {
+        const parsed = yaml.load(fs.readFileSync(devicesYamlPath, 'utf8')) ?? {};
+        for (const [ieee, cfg] of Object.entries(parsed)) {
+          if (cfg?.friendly_name) names[ieee] = cfg.friendly_name;
+        }
+        this.log.info(`[migration] Loaded ${Object.keys(names).length} device name(s) from devices.yaml`);
+      } catch (err) {
+        this.log.warn(`[migration] Could not parse devices.yaml: ${err.message}`);
+      }
     }
 
-    try {
-      // Simple YAML parse for the devices section (avoid heavy yaml dep)
-      const raw = fs.readFileSync(z2mConfigPath, 'utf8');
-      const deviceNames = this._extractDeviceNames(raw);
-      const groupNames  = this._extractGroupNames(raw);
-
-      const result = { devices: deviceNames, groups: groupNames };
-      const destPath = path.join(this.config.data_dir, 'migrated_names.json');
-      fs.writeFileSync(destPath, JSON.stringify(result, null, 2), 'utf8');
-
-      this.log.info(`[migration] Imported ${Object.keys(deviceNames).length} device names, ${Object.keys(groupNames).length} groups`);
-      return result;
-    } catch (err) {
-      this.log.error(`[migration] Failed to import device names: ${err.message}`);
-      return null;
+    // configuration.yaml — standard single-file Z2M setup
+    const configYamlPath = path.join(z2mDataDir, 'configuration.yaml');
+    if (fs.existsSync(configYamlPath)) {
+      try {
+        const parsed = yaml.load(fs.readFileSync(configYamlPath, 'utf8')) ?? {};
+        for (const [ieee, cfg] of Object.entries(parsed.devices ?? {})) {
+          if (cfg?.friendly_name && !names[ieee]) {
+            names[ieee] = cfg.friendly_name; // devices.yaml takes priority
+          }
+        }
+        this.log.info(`[migration] After configuration.yaml: ${Object.keys(names).length} total device name(s)`);
+      } catch (err) {
+        this.log.warn(`[migration] Could not parse configuration.yaml: ${err.message}`);
+      }
     }
+
+    return names;
   }
 
   /**
@@ -117,65 +132,28 @@ class Z2MMigration {
    */
   async runFullMigration(z2mDataDir) {
     this.log.info(`[migration] Starting full Z2M migration from: ${z2mDataDir}`);
+
+    if (!fs.existsSync(z2mDataDir)) {
+      throw new Error(`Z2M data directory not found: ${z2mDataDir}`);
+    }
+
     const results = {
-      coordinator_backup: false,
-      database:           false,
-      device_names:       null,
+      coordinator_backup: this.importCoordinatorBackup(
+        path.join(z2mDataDir, 'coordinator_backup.json')
+      ),
+      database: this.importDatabase(
+        path.join(z2mDataDir, 'database.db')
+      ),
+      device_names: this.extractDeviceNames(z2mDataDir),
     };
 
-    results.coordinator_backup = this.importCoordinatorBackup(
-      path.join(z2mDataDir, 'coordinator_backup.json')
+    results.device_count = Object.keys(results.device_names).length;
+    this.log.info(
+      `[migration] Complete — backup=${results.coordinator_backup}, db=${results.database}, names=${results.device_count}`
     );
-
-    results.database = this.importDatabase(
-      path.join(z2mDataDir, 'database.db')
-    );
-
-    results.device_names = this.importDeviceNames(
-      path.join(z2mDataDir, 'configuration.yaml')
-    );
-
-    this.log.info('[migration] Migration complete', results);
     return results;
   }
 
-  // ── Private YAML helpers ─────────────────────────────────────────────────
-
-  _extractDeviceNames(yamlText) {
-    const result = {};
-    const devicesMatch = yamlText.match(/^devices:\s*\n((?:[ \t]+.*\n?)*)/m);
-    if (!devicesMatch) return result;
-
-    const block = devicesMatch[1];
-    const entries = block.match(/[ \t]+'?0x[0-9a-fA-F]{16}'?:\s*\n((?:[ \t]{4,}.*\n?)*)/g) || [];
-
-    for (const entry of entries) {
-      const ieeeMatch = entry.match(/'?(0x[0-9a-fA-F]{16})'?/);
-      const nameMatch = entry.match(/friendly_name:\s*['"]?([^'">\n]+)['"]?/);
-      if (ieeeMatch && nameMatch) {
-        result[ieeeMatch[1]] = { friendly_name: nameMatch[1].trim() };
-      }
-    }
-    return result;
-  }
-
-  _extractGroupNames(yamlText) {
-    const result = {};
-    const groupsMatch = yamlText.match(/^groups:\s*\n((?:[ \t]+.*\n?)*)/m);
-    if (!groupsMatch) return result;
-
-    const block = groupsMatch[1];
-    const entries = block.match(/[ \t]+\d+:\s*\n((?:[ \t]{4,}.*\n?)*)/g) || [];
-
-    for (const entry of entries) {
-      const idMatch   = entry.match(/(\d+):/);
-      const nameMatch = entry.match(/friendly_name:\s*['"]?([^'">\n]+)['"]?/);
-      if (idMatch && nameMatch) {
-        result[idMatch[1]] = { friendly_name: nameMatch[1].trim() };
-      }
-    }
-    return result;
-  }
 }
 
 module.exports = { Z2MMigration };

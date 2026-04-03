@@ -298,8 +298,13 @@ class WebSocketAPI {
         case 'migrate_z2m': {
           const { Z2MMigration } = require('./migration');
           const migration = new Z2MMigration(this.zigbee.config);
+          // Stop coordinator so herdsman releases database.db before we copy it
+          try { await this.zigbee.stop(); } catch (_) {}
           const result = await migration.runFullMigration(payload.z2m_data_dir);
           reply(result);
+          // Restart add-on process so herdsman initialises fresh from the migrated database.
+          // HA Supervisor automatically restarts the add-on on clean exit.
+          setTimeout(() => process.exit(0), 500);
           break;
         }
 

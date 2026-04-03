@@ -1760,6 +1760,18 @@ class Zigbee2HASSPanel extends HTMLElement {
           </div>
           <div class="tool-result" id="settings-result" style="margin-top:10px"></div>
         </div>
+        <div class="tool-card">
+          <h3>Import from Zigbee2MQTT</h3>
+          <p>Imports the coordinator NVRam backup, paired device database, and friendly names from a Zigbee2MQTT data directory. Your devices will not need to be re-paired.</p>
+          <p style="color:var(--warning-color,#f4b400);font-size:0.85rem">Stop Zigbee2MQTT first. The add-on will restart automatically after a successful import.</p>
+          <label style="display:flex;align-items:center;gap:8px;margin-bottom:14px;font-size:0.9rem">
+            Z2M data dir:
+            <input type="text" id="z2m-data-dir" value="/share/zigbee2mqtt"
+                   style="flex:1;padding:4px 6px;border:1px solid var(--divider-color,#e0e0e0);border-radius:4px;background:var(--card-background-color);color:var(--primary-text-color)">
+          </label>
+          <button class="btn-primary" id="btn-z2m-migrate">Import</button>
+          <div class="tool-result" id="z2m-migrate-result" style="margin-top:10px"></div>
+        </div>
       </div>`;
 
     // Populate current value
@@ -1801,6 +1813,30 @@ class Zigbee2HASSPanel extends HTMLElement {
         this._showToast('Watchdog failed: ' + (err.message ?? err));
       } finally {
         btn.disabled = false; btn.textContent = 'Run\u00a0Now';
+      }
+    });
+
+    content.querySelector('#btn-z2m-migrate')?.addEventListener('click', async () => {
+      const btn   = content.querySelector('#btn-z2m-migrate');
+      const resEl = content.querySelector('#z2m-migrate-result');
+      const dir   = content.querySelector('#z2m-data-dir')?.value?.trim();
+      if (!dir) { resEl.textContent = '⚠ Enter the Z2M data directory path'; return; }
+      // eslint-disable-next-line no-alert
+      if (!confirm(`Import from ${this._escHtml(dir)}?\n\nMake sure Zigbee2MQTT is stopped.\nThe add-on will restart automatically.`)) return;
+      btn.disabled = true; btn.textContent = '…';
+      resEl.textContent = 'Importing…';
+      try {
+        const r = await this._hass.callWS({ type: 'zigbee2hass/z2m_migrate', z2m_data_dir: dir });
+        const parts = [];
+        if (r.coordinator_backup) parts.push('coordinator backup');
+        if (r.database)           parts.push('device database');
+        if (r.device_count > 0)   parts.push(`${r.device_count} device name(s)`);
+        resEl.textContent = `✓ Imported: ${parts.join(', ') || 'no files found'}. Add-on restarting…`;
+        this._showToast('Z2M import complete — add-on restarting');
+      } catch (err) {
+        resEl.textContent = '⚠ ' + (err.message ?? String(err));
+      } finally {
+        btn.disabled = false; btn.textContent = 'Import';
       }
     });
   }
