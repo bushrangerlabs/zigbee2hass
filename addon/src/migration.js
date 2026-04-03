@@ -39,8 +39,13 @@ class Z2MMigration {
     try {
       const backup = JSON.parse(fs.readFileSync(z2mBackupPath, 'utf8'));
 
-      // Validate it is a herdsman-format backup
-      if (!backup.coordinatorIeeeAddress && !backup.data) {
+      // Validate it is a herdsman-format backup.
+      // Old format: { coordinatorIeeeAddress, data, ... }
+      // New open-coordinator-backup format: { coordinator_ieee, pan_id, metadata, ... }
+      const isValid = backup.coordinatorIeeeAddress || backup.data ||
+                      backup.coordinator_ieee || backup.pan_id ||
+                      backup.metadata?.format?.includes('coordinator-backup');
+      if (!isValid) {
         this.log.error('[migration] File does not appear to be a valid coordinator backup');
         return false;
       }
@@ -172,7 +177,10 @@ class Z2MMigration {
       try {
         const buf    = Buffer.from(backupB64, 'base64');
         const backup = JSON.parse(buf.toString('utf8'));
-        if (!backup.coordinatorIeeeAddress && !backup.data) {
+        const isValid = backup.coordinatorIeeeAddress || backup.data ||
+                        backup.coordinator_ieee || backup.pan_id ||
+                        backup.metadata?.format?.includes('coordinator-backup');
+        if (!isValid) {
           this.log.error('[migration] Uploaded backup does not look like a herdsman coordinator backup');
         } else {
           const dest = path.join(this.config.data_dir, 'coordinator_backup.json');
