@@ -1744,6 +1744,10 @@ class Zigbee2HASSPanel extends HTMLElement {
 
   _renderSettings() {
     const content = this.shadowRoot.getElementById('content');
+    // Guard: if the settings DOM is already built, don't rebuild it.
+    // Polling (_fullLoad every 15 s) calls _renderSettings while the tab is
+    // active, which would reset the file inputs mid-selection otherwise.
+    if (content.querySelector('#btn-z2m-migrate')) return;
     content.innerHTML = `
       <div class="tools-grid">
         <div class="tool-card">
