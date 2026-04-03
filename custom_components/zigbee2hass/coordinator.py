@@ -213,6 +213,36 @@ class Zigbee2HASSCoordinator:
             )
         return result
 
+    async def async_migrate_z2m_files(
+        self,
+        backup_b64: str | None,
+        database_b64: str | None,
+        names_text: str | None,
+    ) -> dict:
+        """Apply uploaded Z2M files (for remote/separate-host Z2M installs).
+
+        Accepts base64-encoded file contents sent directly from the browser.
+        The add-on decodes and writes the files, then restarts itself.
+        Friendly names are stored and applied after reconnect.
+        """
+        result = await self._client.request(
+            "migrate_z2m_files",
+            {
+                "backup_b64":   backup_b64,
+                "database_b64": database_b64,
+                "names_text":   names_text,
+            },
+            timeout=30.0,
+        )
+        device_names: dict[str, str] = result.get("device_names") or {}
+        if device_names:
+            self._pending_names = dict(device_names)
+            _LOGGER.info(
+                "Z2M migration (files): stored %d device name(s) to apply after reconnect",
+                len(self._pending_names),
+            )
+        return result
+
     # ── Internal callbacks ────────────────────────────────────────────────
 
     @callback

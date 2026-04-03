@@ -308,6 +308,20 @@ class WebSocketAPI {
           break;
         }
 
+        case 'migrate_z2m_files': {
+          const { Z2MMigration } = require('./migration');
+          const migration = new Z2MMigration(this.zigbee.config);
+          try { await this.zigbee.stop(); } catch (_) {}
+          const result = migration.applyFiles({
+            backupB64:   payload.backup_b64   ?? null,
+            databaseB64: payload.database_b64 ?? null,
+            namesText:   payload.names_text   ?? null,
+          });
+          reply(result);
+          setTimeout(() => process.exit(0), 500);
+          break;
+        }
+
         case 'health': {
           reply({ healthy: true, failures: 0, silenceMs: 0 });
           break;

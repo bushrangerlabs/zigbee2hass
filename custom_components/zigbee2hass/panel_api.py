@@ -37,6 +37,7 @@ def async_register_panel_api(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_set_settings)
     websocket_api.async_register_command(hass, ws_run_watchdog)
     websocket_api.async_register_command(hass, ws_z2m_migrate)
+    websocket_api.async_register_command(hass, ws_z2m_migrate_files)
 
 
 def _get_coordinator(hass: HomeAssistant, connection, msg_id: int):
@@ -462,4 +463,35 @@ async def ws_z2m_migrate(
     if not coordinator:
         return
     result = await coordinator.async_migrate_z2m(msg["z2m_data_dir"])
+    connection.send_result(msg["id"], result)
+
+
+# ── z2m_migrate_files ────────────────────────────────────────────────────────────────
+
+@websocket_api.websocket_command({
+    "type": "zigbee2hass/z2m_migrate_files",
+    vol.Optional("backup_b64"):   str,
+    vol.Optional("database_b64"): str,
+    vol.Optional("names_text"):   str,
+})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_z2m_migrate_files(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    """Accept uploaded file contents (base64) and apply them as a Z2M migration.
+
+    Used when Z2M runs on a separate host — the user downloads the files and
+    uploads them through the panel rather than providing a local directory path.
+    """
+    coordinator = _get_coordinator(hass, connection, msg["id"])
+    if not coordinator:
+        return
+    result = await coordinator.async_migrate_z2m_files(
+        backup_b64=msg.get("backup_b64"),
+        database_b64=msg.get("database_b64"),
+        names_text=msg.get("names_text"),
+    )
     connection.send_result(msg["id"], result)

@@ -1762,13 +1762,22 @@ class Zigbee2HASSPanel extends HTMLElement {
         </div>
         <div class="tool-card">
           <h3>Import from Zigbee2MQTT</h3>
-          <p>Imports the coordinator NVRam backup, paired device database, and friendly names from a Zigbee2MQTT data directory. Your devices will not need to be re-paired.</p>
-          <p style="color:var(--warning-color,#f4b400);font-size:0.85rem">Stop Zigbee2MQTT first. The add-on will restart automatically after a successful import.</p>
-          <label style="display:flex;align-items:center;gap:8px;margin-bottom:14px;font-size:0.9rem">
-            Z2M data dir:
-            <input type="text" id="z2m-data-dir" value="/share/zigbee2mqtt"
-                   style="flex:1;padding:4px 6px;border:1px solid var(--divider-color,#e0e0e0);border-radius:4px;background:var(--card-background-color);color:var(--primary-text-color)">
-          </label>
+          <p>Download these files from your Z2M host and upload them here. Your devices will not need to be re-paired.</p>
+          <p style="color:var(--warning-color,#f4b400);font-size:0.85rem">Stop Zigbee2MQTT first. The add-on will restart automatically after import.</p>
+          <div style="display:grid;gap:10px;margin-bottom:14px;font-size:0.88rem">
+            <label style="display:flex;flex-direction:column;gap:4px">
+              <span>coordinator_backup.json <span style="color:var(--error-color,#f44336)">(required)</span></span>
+              <input type="file" id="z2m-backup" accept=".json" style="color:var(--primary-text-color)">
+            </label>
+            <label style="display:flex;flex-direction:column;gap:4px">
+              <span>database.db <span style="color:var(--error-color,#f44336)">(required)</span></span>
+              <input type="file" id="z2m-database" accept=".db" style="color:var(--primary-text-color)">
+            </label>
+            <label style="display:flex;flex-direction:column;gap:4px">
+              <span>configuration.yaml <em>or</em> devices.yaml <span style="opacity:0.6">(optional — for friendly names)</span></span>
+              <input type="file" id="z2m-names" accept=".yaml,.yml" style="color:var(--primary-text-color)">
+            </label>
+          </div>
           <button class="btn-primary" id="btn-z2m-migrate">Import</button>
           <div class="tool-result" id="z2m-migrate-result" style="margin-top:10px"></div>
         </div>
@@ -1817,21 +1826,49 @@ class Zigbee2HASSPanel extends HTMLElement {
     });
 
     content.querySelector('#btn-z2m-migrate')?.addEventListener('click', async () => {
-      const btn   = content.querySelector('#btn-z2m-migrate');
-      const resEl = content.querySelector('#z2m-migrate-result');
-      const dir   = content.querySelector('#z2m-data-dir')?.value?.trim();
-      if (!dir) { resEl.textContent = '⚠ Enter the Z2M data directory path'; return; }
-      // eslint-disable-next-line no-alert
-      if (!confirm(`Import from ${this._escHtml(dir)}?\n\nMake sure Zigbee2MQTT is stopped.\nThe add-on will restart automatically.`)) return;
+      const btn      = content.querySelector('#btn-z2m-migrate');
+      const resEl    = content.querySelector('#z2m-migrate-result');
+      const backupInput   = content.querySelector('#z2m-backup');
+      const databaseInput = content.querySelector('#z2m-database');
+      const namesInput    = content.querySelector('#z2m-names');
+
+      if (!backupInput?.files?.[0] && !databaseInput?.files?.[0]) {
+        resEl.textContent = '⚠ Select at least coordinator_backup.json or database.db';
+        return;
+      }
+
+      const _readB64 = (file) => new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload  = () => resolve(r.result.split(',')[1]); // strip 'data:...;base64,'
+        r.onerror = reject;
+        r.readAsDataURL(file);
+      });
+      const _readText = (file) => new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload  = () => resolve(r.result);
+        r.onerror = reject;
+        r.readAsText(file);
+      });
+
       btn.disabled = true; btn.textContent = '…';
-      resEl.textContent = 'Importing…';
+      resEl.textContent = 'Reading files…';
       try {
-        const r = await this._hass.callWS({ type: 'zigbee2hass/z2m_migrate', z2m_data_dir: dir });
+        const backupB64   = backupInput?.files?.[0]   ? await _readB64(backupInput.files[0])   : null;
+        const databaseB64 = databaseInput?.files?.[0] ? await _readB64(databaseInput.files[0]) : null;
+        const namesText   = namesInput?.files?.[0]    ? await _readText(namesInput.files[0])   : null;
+
+        resEl.textContent = 'Uploading…';
+        const r = await this._hass.callWS({
+          type:         'zigbee2hass/z2m_migrate_files',
+          backup_b64:   backupB64,
+          database_b64: databaseB64,
+          names_text:   namesText,
+        });
         const parts = [];
         if (r.coordinator_backup) parts.push('coordinator backup');
         if (r.database)           parts.push('device database');
         if (r.device_count > 0)   parts.push(`${r.device_count} device name(s)`);
-        resEl.textContent = `✓ Imported: ${parts.join(', ') || 'no files found'}. Add-on restarting…`;
+        resEl.textContent = `✓ Imported: ${parts.join(', ') || 'no files applied'}. Add-on restarting…`;
         this._showToast('Z2M import complete — add-on restarting');
       } catch (err) {
         resEl.textContent = '⚠ ' + (err.message ?? String(err));
