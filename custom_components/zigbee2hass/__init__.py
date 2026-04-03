@@ -137,9 +137,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         coordinator: Zigbee2HASSCoordinator = hass.data[DOMAIN].pop(entry.entry_id)
         await coordinator.async_stop()
 
-        # Remove the panel when the last config entry is gone
+        # Remove the panel and unregister services when the last config entry is gone
         remaining = [k for k in hass.data[DOMAIN] if k != "_panel_registered"]
         if not remaining:
+            async_unregister_services(hass)
             try:
                 async_remove_panel(hass, "zigbee2hass-panel")
                 hass.data[DOMAIN].pop("_panel_registered", None)

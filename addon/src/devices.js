@@ -691,9 +691,9 @@ class DeviceManager {
           this.emit('availability_changed', { ieee_address, available: false });
         }
       } else {
-        // Mains devices: actively ping
+        // Mains devices: actively ping the device itself (not just the coordinator)
         try {
-          const latency = await this.zigbee.ping(ieee_address);
+          const latency = await this.zigbee.pingDevice(ieee_address);
           avail.last_seen = Date.now();
           if (!avail.available) {
             avail.available = true;

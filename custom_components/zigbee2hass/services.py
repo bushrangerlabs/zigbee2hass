@@ -46,11 +46,15 @@ def async_register_services(hass: HomeAssistant) -> None:
     """Register all Zigbee2HASS services."""
 
     def _get_coordinator(call: ServiceCall) -> Zigbee2HASSCoordinator:
-        """Get the first available coordinator."""
-        entry_id = next(iter(hass.data.get(DOMAIN, {})), None)
+        """Get the first available coordinator, skipping non-coordinator domain keys."""
+        domain_data = hass.data.get(DOMAIN, {})
+        entry_id = next(
+            (k for k, v in domain_data.items() if isinstance(v, Zigbee2HASSCoordinator)),
+            None,
+        )
         if not entry_id:
             raise ValueError("No Zigbee2HASS integration configured")
-        return hass.data[DOMAIN][entry_id]
+        return domain_data[entry_id]
 
     async def handle_permit_join(call: ServiceCall) -> None:
         coordinator = _get_coordinator(call)
