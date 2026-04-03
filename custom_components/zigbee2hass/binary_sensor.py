@@ -120,4 +120,9 @@ class Zigbee2HASSBinarySensor(Zigbee2HASSEntity, BinarySensorEntity):
         val = self._get_state_value(self._property)
         if val is None:
             return None
-        return val == self._value_on or val is True or str(val).lower() == "true"
+        # Compare strictly against value_on. ZHC sets value_on=False for sensors
+        # where the "active" state is the boolean false (e.g. contact: false = open).
+        # The previous fallbacks (val is True, str == "true") broke those sensors
+        # because they would fire even when value_on is False, keeping the entity
+        # pinned to its initial state regardless of what the device reported.
+        return val == self._value_on

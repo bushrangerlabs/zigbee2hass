@@ -682,14 +682,11 @@ class DeviceManager {
       const isSleeping     = device.type === 'EndDevice' && !isMainsPowered;
 
       if (isSleeping) {
-        // Battery devices: use silence window, don't actively ping
-        const silence = now - (avail.last_seen ?? 0);
-        if (silence > timeoutMs && avail.available) {
-          this.log.debug(`[devices] Battery device ${ieee_address} silent for ${Math.round(silence/1000)}s`);
-          avail.available = false;
-          this._availability.set(ieee_address, avail);
-          this.emit('availability_changed', { ieee_address, available: false });
-        }
+        // Battery/sleeping devices are silent by design — do not mark them
+        // unavailable based on silence. They only go unavailable when the bridge
+        // itself disconnects (handled by the WS disconnect path). Marking them
+        // unavailable after a silence window causes healthy door sensors, motion
+        // sensors, and remotes to appear offline after a quiet evening.
       } else {
         // Mains devices: actively ping the device itself (not just the coordinator)
         try {
