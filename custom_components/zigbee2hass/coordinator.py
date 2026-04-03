@@ -70,6 +70,9 @@ class Zigbee2HASSCoordinator:
         # Device names to apply to the HA device registry after a Z2M migration
         # (stored across the add-on restart that follows migration)
         self._pending_names: dict[str, str] = {}
+        # When True, _handle_bridge_devices will remove HA devices that are not
+        # present in the first snapshot after a migration (cleans up stale entries)
+        self._pending_migration_cleanup: bool = False
 
         self._client = Zigbee2HASSClient(
             host=host,
@@ -202,6 +205,7 @@ class Zigbee2HASSCoordinator:
         result = await self._client.request(
             "migrate_z2m", {"z2m_data_dir": z2m_data_dir}, timeout=30.0
         )
+        self._pending_migration_cleanup = True
         # Store names now; they will be applied in _handle_bridge_devices after
         # the add-on restarts and sends the new device snapshot.
         device_names: dict[str, str] = result.get("device_names") or {}
@@ -234,6 +238,7 @@ class Zigbee2HASSCoordinator:
             },
             timeout=30.0,
         )
+        self._pending_migration_cleanup = True
         device_names: dict[str, str] = result.get("device_names") or {}
         if device_names:
             self._pending_names = dict(device_names)
@@ -400,6 +405,28 @@ class Zigbee2HASSCoordinator:
                 _LOGGER.info(
                     "Z2M migration: applied %d friendly name(s) to HA device registry",
                     applied,
+                )
+
+        # Remove stale HA devices left over from before the migration.
+        # Only runs once, immediately after the first post-migration snapshot.
+        if self._pending_migration_cleanup:
+            self._pending_migration_cleanup = False
+            current_ieee = set(self.devices.keys()) - {"coordinator"}
+            removed = 0
+            for entry in dr.async_entries_for_config_entry(self.hass, self.entry.entry_id):
+                for ident_domain, identifier in entry.identifiers:
+                    if (
+                        ident_domain == DOMAIN
+                        and identifier != "coordinator"
+                        and identifier not in current_ieee
+                    ):
+                        dev_reg.async_remove_device(entry.id)
+                        removed += 1
+                        break
+            if removed:
+                _LOGGER.info(
+                    "Z2M migration: removed %d stale HA device(s) not present in imported database",
+                    removed,
                 )
 
         # Unblock async_start() if it's still waiting
