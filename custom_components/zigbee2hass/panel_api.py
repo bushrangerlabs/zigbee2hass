@@ -38,6 +38,7 @@ def async_register_panel_api(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_run_watchdog)
     websocket_api.async_register_command(hass, ws_z2m_migrate)
     websocket_api.async_register_command(hass, ws_z2m_migrate_files)
+    websocket_api.async_register_command(hass, ws_get_logs)
 
 
 def _get_coordinator(hass: HomeAssistant, connection, msg_id: int):
@@ -494,4 +495,21 @@ async def ws_z2m_migrate_files(
         database_b64=msg.get("database_b64"),
         names_text=msg.get("names_text"),
     )
+    connection.send_result(msg["id"], result)
+
+
+# ── get_logs ────────────────────────────────────────────────────────────────
+
+@websocket_api.websocket_command({"type": "zigbee2hass/get_logs"})
+@websocket_api.async_response
+async def ws_get_logs(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    """Return the add-on's in-memory log buffer to the panel."""
+    coordinator = _get_coordinator(hass, connection, msg["id"])
+    if not coordinator:
+        return
+    result = await coordinator.async_get_logs()
     connection.send_result(msg["id"], result)

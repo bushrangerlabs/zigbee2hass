@@ -33,6 +33,10 @@ class Zigbee2HASSPanel extends HTMLElement {
       this._selectedGroupId  = null;
       this._groups           = [];
       this._mapData          = null;  // cached LQI scan result
+      this._logs             = [];    // accumulated log entries from add-on
+      this._logSub           = null;  // HA event unsubscription for log_entry
+      this._logMinLevel      = 'info'; // current display level filter
+      this._logsFetched      = false; // have we fetched the initial buffer yet
       this._setup();
       this._fullLoad();
       this._startPolling();
@@ -46,6 +50,7 @@ class Zigbee2HASSPanel extends HTMLElement {
     this._stopPolling();
     if (this._pjTimer)    { clearInterval(this._pjTimer); this._pjTimer = null; }
     if (this._pairingUnsub) { this._pairingUnsub(); this._pairingUnsub = null; }
+    if (this._logSub)       { this._logSub();       this._logSub       = null; }
   }
 
   // ── Setup ────────────────────────────────────────────────────────────────
@@ -689,6 +694,52 @@ class Zigbee2HASSPanel extends HTMLElement {
         .tool-card h3 { margin:0 0 8px; font-size:0.9rem; font-weight:600; }
         .tool-card p  { margin:0 0 12px; font-size:0.82rem; color:var(--secondary-text-color,#757575); }
         .tool-result { margin-top:8px; font-size:0.8rem; color:var(--secondary-text-color,#888); word-break:break-all; }
+
+        /* ── Log tab ── */
+        .log-toolbar {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          margin-bottom: 12px;
+          flex-wrap: wrap;
+        }
+        .log-toolbar label { font-size:0.85rem; color:var(--secondary-text-color,#757575); }
+        .log-toolbar select {
+          padding: 4px 8px;
+          border: 1px solid var(--divider-color,#e0e0e0);
+          border-radius: 4px;
+          background: var(--card-background-color,#fff);
+          color: var(--primary-text-color,#212121);
+          font-size: 0.85rem;
+        }
+        .log-count { font-size:0.8rem; color:var(--secondary-text-color,#888); margin-left:auto; }
+        .log-container {
+          height: 520px;
+          overflow-y: auto;
+          background: var(--code-editor-background-color, #1e1e1e);
+          border-radius: 6px;
+          padding: 8px;
+          font-family: 'Roboto Mono', 'Courier New', monospace;
+          font-size: 0.78rem;
+          line-height: 1.6;
+        }
+        .log-entry {
+          display: flex;
+          gap: 8px;
+          padding: 1px 0;
+          border-bottom: 1px solid rgba(255,255,255,0.04);
+          align-items: baseline;
+        }
+        .log-ts    { color:#666; white-space:nowrap; flex-shrink:0; }
+        .log-badge { font-size:0.68rem; font-weight:700; padding:1px 5px; border-radius:3px; white-space:nowrap; flex-shrink:0; }
+        .log-badge-debug { background:#333; color:#999; }
+        .log-badge-info  { background:#1a3a5c; color:#6ab0f5; }
+        .log-badge-warn  { background:#3d2e00; color:#f5c542; }
+        .log-badge-error { background:#3d0000; color:#f56c6c; }
+        .log-msg { color:#d4d4d4; word-break:break-word; flex:1; }
+        .log-level-error .log-msg { color:#f56c6c; }
+        .log-level-warn  .log-msg { color:#f5c542; }
+        .log-level-debug .log-msg { color:#888; }
       </style>
 
       <div class="header">
@@ -706,6 +757,7 @@ class Zigbee2HASSPanel extends HTMLElement {
         <button class="tab-btn" data-tab="map"><ha-icon icon="mdi:map-marker-path" style="width:18px;height:18px;vertical-align:middle"></ha-icon> Network Map</button>
         <button class="tab-btn" data-tab="groups"><ha-icon icon="mdi:account-group" style="width:18px;height:18px;vertical-align:middle"></ha-icon> Groups</button>
         <button class="tab-btn" data-tab="tools"><ha-icon icon="mdi:tools" style="width:18px;height:18px;vertical-align:middle"></ha-icon> Tools</button>
+        <button class="tab-btn" data-tab="log"><ha-icon icon="mdi:text-box-outline" style="width:18px;height:18px;vertical-align:middle"></ha-icon> Log</button>
         <button class="tab-btn" data-tab="settings"><ha-icon icon="mdi:cog" style="width:18px;height:18px;vertical-align:middle"></ha-icon> Settings</button>
       </div>
 
@@ -817,6 +869,16 @@ class Zigbee2HASSPanel extends HTMLElement {
           'zigbee2hass_pairing_event'
         );
       } catch (_) { /* non-fatal — panel still works without live events */ }
+    }
+
+    // Subscribe to live log entries from the add-on for the Log tab.
+    if (!this._logSub) {
+      try {
+        this._logSub = await this._hass.connection.subscribeEvents(
+          (event) => this._onLogEntry(event.data),
+          'zigbee2hass_log_entry'
+        );
+      } catch (_) { /* non-fatal */ }
     }
 
     this._renderAll();
@@ -1026,6 +1088,7 @@ class Zigbee2HASSPanel extends HTMLElement {
     else if (tab === 'map')      this._renderNetworkMap();
     else if (tab === 'groups')   this._renderGroups();
     else if (tab === 'tools')    this._renderTools();
+    else if (tab === 'log')      this._renderLog();
     else if (tab === 'settings') this._renderSettings();
   }
 
@@ -1879,6 +1942,106 @@ class Zigbee2HASSPanel extends HTMLElement {
         btn.disabled = false; btn.textContent = 'Import';
       }
     });
+  }
+
+  // ── Log tab ────────────────────────────────────────────────────────────────────
+
+  _renderLog() {
+    const content = this.shadowRoot.getElementById('content');
+    if (!content.querySelector('#log-container')) {
+      content.innerHTML = `
+        <div class="log-toolbar">
+          <label for="log-level-filter">Min level:</label>
+          <select id="log-level-filter">
+            <option value="debug">Debug</option>
+            <option value="info" selected>Info</option>
+            <option value="warn">Warn</option>
+            <option value="error">Error</option>
+          </select>
+          <button class="btn-ghost btn-sm" id="btn-log-clear">Clear</button>
+          <span class="log-count" id="log-count"></span>
+        </div>
+        <div class="log-container" id="log-container"></div>
+      `;
+      content.querySelector('#btn-log-clear').addEventListener('click', () => {
+        this._logs = [];
+        this._renderLogEntries();
+      });
+      content.querySelector('#log-level-filter').addEventListener('change', (e) => {
+        this._logMinLevel = e.target.value;
+        this._renderLogEntries();
+      });
+      // Restore saved level filter selection
+      const sel = content.querySelector('#log-level-filter');
+      if (sel) sel.value = this._logMinLevel ?? 'info';
+
+      // Fetch the add-on's in-memory buffer once — after that, live events
+      // keep the view up to date without any further polling.
+      if (!this._logsFetched) {
+        this._logsFetched = true;
+        this._hass.callWS({ type: 'zigbee2hass/get_logs' }).then(res => {
+          const incoming = res?.logs ?? [];
+          // Prepend buffered entries; avoid duplicates from live events received
+          // while the request was in flight by prepending only older entries.
+          const merged = [...incoming, ...this._logs];
+          this._logs = merged.slice(-500);
+          this._renderLogEntries();
+        }).catch(() => { /* non-fatal — show whatever live entries we have */ });
+      }
+    }
+    this._renderLogEntries();
+  }
+
+  _renderLogEntries() {
+    const container = this.shadowRoot.getElementById('log-container');
+    if (!container) return;
+    const LEVELS = ['debug', 'info', 'warn', 'error'];
+    const minIdx = LEVELS.indexOf(this._logMinLevel ?? 'info');
+    const filtered = this._logs.filter(e => LEVELS.indexOf(e.level ?? 'info') >= minIdx);
+    const countEl  = this.shadowRoot.getElementById('log-count');
+    if (countEl) countEl.textContent = `${filtered.length} entr${filtered.length === 1 ? 'y' : 'ies'}`;
+    const atBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 20;
+    container.innerHTML = filtered.map(e => {
+      const level = this._escHtml(e.level ?? 'info');
+      const ts    = this._escHtml((e.ts ?? '').replace('T', ' ').replace(/\.\d+Z$/, ''));
+      const msg   = this._escHtml(e.msg ?? '');
+      return `<div class="log-entry log-level-${level}">`
+           + `<span class="log-ts">${ts}</span>`
+           + `<span class="log-badge log-badge-${level}">${level.toUpperCase()}</span>`
+           + `<span class="log-msg">${msg}</span>`
+           + `</div>`;
+    }).join('');
+    if (atBottom) container.scrollTop = container.scrollHeight;
+  }
+
+  _onLogEntry(data) {
+    if (!data) return;
+    this._logs.push(data);
+    if (this._logs.length > 500) this._logs.shift();
+
+    if (this._activeTab !== 'log') return;
+    // Incremental DOM append — avoids re-rendering all entries on every message
+    const LEVELS = ['debug', 'info', 'warn', 'error'];
+    const minIdx = LEVELS.indexOf(this._logMinLevel ?? 'info');
+    if (LEVELS.indexOf(data.level ?? 'info') < minIdx) return; // filtered out
+    const container = this.shadowRoot.getElementById('log-container');
+    if (!container) return;
+    const atBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 20;
+    const level = this._escHtml(data.level ?? 'info');
+    const ts    = this._escHtml((data.ts ?? '').replace('T', ' ').replace(/\.\d+Z$/, ''));
+    const msg   = this._escHtml(data.msg ?? '');
+    const div   = document.createElement('div');
+    div.className   = `log-entry log-level-${level}`;
+    div.innerHTML   = `<span class="log-ts">${ts}</span>`
+                    + `<span class="log-badge log-badge-${level}">${level.toUpperCase()}</span>`
+                    + `<span class="log-msg">${msg}</span>`;
+    container.appendChild(div);
+    const countEl = this.shadowRoot.getElementById('log-count');
+    if (countEl) {
+      const filtered = this._logs.filter(e => LEVELS.indexOf(e.level ?? 'info') >= minIdx);
+      countEl.textContent = `${filtered.length} entr${filtered.length === 1 ? 'y' : 'ies'}`;
+    }
+    if (atBottom) container.scrollTop = container.scrollHeight;
   }
 
   async _repairDevice(ieee, btn) {

@@ -32,6 +32,7 @@ from .const import (
     TOPIC_DEVICE_READY,
     TOPIC_DEVICE_RENAMED,
     TOPIC_DEVICE_STATE,
+    TOPIC_LOG_ENTRY,
     TOPIC_PERMIT_JOIN,
 )
 from .websocket_client import Zigbee2HASSClient
@@ -193,6 +194,10 @@ class Zigbee2HASSCoordinator:
     async def async_ota_check(self, ieee_address: str) -> dict:
         return await self._client.request("ota_check", {"ieee_address": ieee_address})
 
+    async def async_get_logs(self) -> dict:
+        """Fetch the addon's in-memory log buffer."""
+        return await self._client.request("get_logs")
+
     async def async_migrate_z2m(self, z2m_data_dir: str) -> dict:
         """Run a full Zigbee2MQTT migration.
 
@@ -328,6 +333,16 @@ class Zigbee2HASSCoordinator:
                     "status":       status,
                     "entry_id":     self.entry.entry_id,
                 })
+
+        elif topic == TOPIC_LOG_ENTRY:
+            # Relay addon log entries to the HA bus so the panel can subscribe
+            # and show a live log view without direct WS access.
+            self.hass.bus.async_fire(f"{DOMAIN}_log_entry", {
+                "entry_id": self.entry.entry_id,
+                "ts":       payload.get("ts"),
+                "level":    payload.get("level"),
+                "msg":      payload.get("msg"),
+            })
 
         elif topic == TOPIC_PERMIT_JOIN:
             # ZHC emits 'permitted' in v9; older versions used 'permit'

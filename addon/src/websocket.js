@@ -1,7 +1,7 @@
 'use strict';
 
 const { WebSocketServer } = require('ws');
-const { getLogger }       = require('./logger');
+const { getLogger, getLogs, clearLogs, onLogEntry, offLogEntry } = require('./logger');
 
 /**
  * Build a zigbee2mqtt.io CDN image URL from a serialized ZHC definition.
@@ -27,6 +27,7 @@ function _deviceImageUrl(definition) {
  *  zigbee2hass/device/left           - device left network
  *  zigbee2hass/device/ready          - device interviewed and ready
  *  zigbee2hass/permitjoin            - permit join status
+ *  zigbee2hass/log_entry             - a new log line (live streaming)
  *  zigbee2hass/error                 - error notification
  *
  * Message types received FROM clients
@@ -55,11 +56,12 @@ class WebSocketAPI {
    * @param {DeviceManager} devices
    */
   constructor(port, zigbee, devices) {
-    this.port     = port;
-    this.zigbee   = zigbee;
-    this.devices  = devices;
-    this.log      = getLogger();
-    this.wss      = null;
+    this.port           = port;
+    this.zigbee         = zigbee;
+    this.devices        = devices;
+    this.log            = getLogger();
+    this.wss            = null;
+    this._logListener   = null;  // registered with onLogEntry for live streaming
   }
 
   start() {
@@ -99,9 +101,18 @@ class WebSocketAPI {
     this.wss.on('error', (err) => {
       this.log.error(`[ws] Server error: ${err.message}`);
     });
+
+    // Stream every log entry to all connected WebSocket clients so the panel
+    // Log tab receives live output without polling.
+    this._logListener = entry => this.broadcast('zigbee2hass/log_entry', entry);
+    onLogEntry(this._logListener);
   }
 
   stop() {
+    if (this._logListener) {
+      offLogEntry(this._logListener);
+      this._logListener = null;
+    }
     if (this.wss) {
       this.wss.close();
       this.wss = null;
@@ -319,6 +330,17 @@ class WebSocketAPI {
           });
           reply(result);
           setTimeout(() => process.exit(0), 500);
+          break;
+        }
+
+        case 'get_logs': {
+          reply({ logs: getLogs() });
+          break;
+        }
+
+        case 'clear_logs': {
+          clearLogs();
+          reply({ cleared: true });
           break;
         }
 
