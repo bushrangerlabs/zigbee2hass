@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
 
 from homeassistant.components.frontend import async_register_built_in_panel, async_remove_panel
 from homeassistant.components.http import StaticPathConfig
@@ -23,7 +22,6 @@ from homeassistant.helpers import device_registry as dr
 
 from .const import DOMAIN
 from .panel_api import async_register_panel_api
-from .websocket_client import Zigbee2HASSClient
 from .coordinator import Zigbee2HASSCoordinator
 from .services import async_register_services, async_unregister_services
 

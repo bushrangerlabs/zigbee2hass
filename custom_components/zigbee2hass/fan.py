@@ -1,12 +1,9 @@
 """Fan platform for Zigbee2HASS."""
 from __future__ import annotations
 
-import math
 from typing import Any
 
 from homeassistant.components.fan import (
-    ATTR_PERCENTAGE,
-    ATTR_PRESET_MODE,
     FanEntity,
     FanEntityFeature,
 )
@@ -86,7 +83,6 @@ class Zigbee2HASSFan(Zigbee2HASSEntity, FanEntity):
         super().__init__(coordinator, ieee_address, expose)
 
         features_list = expose.get("features", [])
-        feature_names = {f["name"] for f in features_list}
         supported     = FanEntityFeature.TURN_ON | FanEntityFeature.TURN_OFF
 
         # Speed / percentage support

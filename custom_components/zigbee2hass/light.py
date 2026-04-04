@@ -9,16 +9,14 @@ from homeassistant.components.light import (
     ATTR_COLOR_TEMP_KELVIN,
     ATTR_HS_COLOR,
     ATTR_RGB_COLOR,
-    ATTR_XY_COLOR,
     ColorMode,
     LightEntity,
-    LightEntityFeature,
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, EXPOSE_LIGHT
+from .const import DOMAIN
 from .coordinator import Zigbee2HASSCoordinator
 from .entity import Zigbee2HASSEntity
 from .entity_factory import exposes_to_platforms
