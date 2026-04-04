@@ -829,6 +829,7 @@ class DeviceManager {
           const latency = await this.zigbee.pingDevice(ieee_address);
           this.log.debug(`[avail] ${ieee_address} (${modelLabel}) — online ${latency}ms`);
           avail.last_seen = Date.now();
+          avail.failCount = 0; // reset on success
           if (!avail.available) {
             avail.available = true;
             this._availability.set(ieee_address, avail);
@@ -861,11 +862,15 @@ class DeviceManager {
           }
         } catch {
           this.log.debug(`[avail] ${ieee_address} (${modelLabel}) — ping failed`);
-          if (avail.available) {
+          avail.failCount = (avail.failCount ?? 0) + 1;
+          const threshold = this.config.availability_ping_failures ?? 2;
+          if (avail.available && avail.failCount >= threshold) {
             avail.available = false;
             this._availability.set(ieee_address, avail);
-            this.log.warn(`[avail] ${ieee_address} (${modelLabel}) went offline`);
+            this.log.warn(`[avail] ${ieee_address} (${modelLabel}) went offline (${avail.failCount} consecutive ping failures)`);
             this.emit('availability_changed', { ieee_address, available: false });
+          } else if (avail.available && avail.failCount < threshold) {
+            this.log.debug(`[avail] ${ieee_address} (${modelLabel}) — ping failed (${avail.failCount}/${threshold})`);
           }
         }
       }

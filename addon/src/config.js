@@ -28,7 +28,8 @@ const DEFAULTS = {
   log_level:                'info',
   availability_timeout:     300,        // seconds before device marked unavailable
   availability_ping_interval: 60,       // seconds between pings for mains devices
-  startup_grace_period:     120,        // seconds before first availability ping (allow mesh to rebuild after restart)
+  availability_ping_failures: 2,        // consecutive ping failures before marking a device offline
+  startup_grace_period:     300,        // seconds before first availability ping (allow mesh to rebuild after restart)
   command_timeout:          5000,       // ms to wait for command ack
   command_retries:          3,
   occupancy_timeout:        90,         // seconds before auto-clearing occupancy/presence (0 = disable)
