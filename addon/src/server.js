@@ -19,6 +19,7 @@ const { initLogger, getLogger } = require('./logger');
 const { ZigbeeController } = require('./zigbee');
 const { DeviceManager }   = require('./devices');
 const { WebSocketAPI }    = require('./websocket');
+const { takeSnapshot }    = require('./snapshot');
 
 async function main() {
   const config = loadConfig();
@@ -152,6 +153,11 @@ async function main() {
   }
 
   // ── Start sequence ──────────────────────────────────────────────────────
+
+  // Take a pre-start snapshot of coordinator_backup.json + database.db before
+  // herdsman touches anything. Mirrors ioBroker.zigbee's startup archive.
+  // Best-effort — never blocks startup on failure.
+  takeSnapshot(config, log);
 
   try {
     await zigbee.start();

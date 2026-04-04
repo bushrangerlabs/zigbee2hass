@@ -1,6 +1,6 @@
 name: "Zigbee2HASS"
 description: "Reliable Zigbee for Home Assistant via zigbee-herdsman. No MQTT required."
-version: "0.1.82"
+version: "0.1.83"
 slug: "zigbee2hass"
 url: "https://github.com/bushrangerlabs/zigbee2hass"
 arch:
@@ -44,6 +44,7 @@ options:
   occupancy_timeout: 90
   nvram_backup: true
   nvram_backup_interval: 3600
+  startup_snapshot_keep: 10
   permit_join_timeout: 254
 
 schema:
@@ -73,6 +74,7 @@ schema:
   occupancy_timeout: int
   nvram_backup: bool
   nvram_backup_interval: int
+  startup_snapshot_keep: "int(0,50)"
   permit_join_timeout: int
 
 environment:

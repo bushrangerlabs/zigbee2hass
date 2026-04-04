@@ -41,6 +41,7 @@ const DEFAULTS = {
   occupancy_timeout:        90,         // seconds before auto-clearing occupancy/presence (0 = disable)
   nvram_backup:             true,
   nvram_backup_interval:    3600,       // seconds between automatic NVRam backups
+  startup_snapshot_keep:    10,         // number of pre-start snapshots to retain (0 = disable snapshots)
   permit_join_timeout:      254,        // seconds to keep network open for pairing on startup (0 = disabled)
   data_dir:                 DATA_DIR,
 };

@@ -144,6 +144,8 @@ Set `serial_port` to a URI instead of a device path — no extra drivers or soft
 
 **NVRam backup** — the coordinator NVRam (which stores your paired device network) is automatically backed up every hour by default. This lets you swap coordinator hardware without re-pairing all devices.
 
+**Startup snapshots** — before herdsman starts each session, a timestamped copy of `coordinator_backup.json` and `database.db` is saved to `/data/snapshots/`. The 10 most recent snapshots are kept. This provides a clean rollback point if herdsman ever corrupts the database on a bad startup (power cut, etc.). Set `startup_snapshot_keep: 0` to disable.
+
 ---
 
 ## Configuration Options
@@ -163,6 +165,7 @@ Set `serial_port` to a URI instead of a device path — no extra drivers or soft
 | `command_retries` | `3` | Number of command retry attempts |
 | `nvram_backup` | `true` | Enable automatic NVRam backups |
 | `nvram_backup_interval` | `3600` | Seconds between automatic backups |
+| `startup_snapshot_keep` | `10` | Pre-start snapshots to retain (0 = disable) |
 
 #### `serial_port` formats
 
