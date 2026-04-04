@@ -45,7 +45,8 @@ class DeviceManager {
     /** @type {Map<string, NodeJS.Timeout>} "ieee:property" → reset timer for auto-clearing binary states */
     this._occupancyTimers = new Map();
 
-    this._availabilityTimer  = null;
+    this._availabilityTimer      = null;
+    this._availabilityGraceTimer = null;
     this._statePersistTimer  = null;
     this._stateFile = path.join(config.data_dir ?? '/data', 'device_state.json');
   }
@@ -111,14 +112,28 @@ class DeviceManager {
       })();
     }
 
-    // Start availability polling for mains-powered devices
-    this._availabilityTimer = setInterval(
-      () => this._checkAvailability(),
-      this.config.availability_ping_interval * 1000
-    );
+    // Start availability polling for mains-powered devices.
+    // Delay the first check by the startup grace period so the Zigbee mesh
+    // has time to rebuild routing tables after a coordinator restart.
+    // Without this, mains-powered devices lacking a direct coordinator route
+    // go unavailable within 60s of startup even when the network key is correct.
+    const graceMs = (this.config.startup_grace_period ?? 120) * 1000;
+    this._availabilityGraceTimer = setTimeout(() => {
+      this._availabilityGraceTimer = null;
+      this._availabilityTimer = setInterval(
+        () => this._checkAvailability(),
+        this.config.availability_ping_interval * 1000
+      );
+      // Run immediately once the grace period expires
+      this._checkAvailability();
+    }, graceMs);
   }
 
   stop() {
+    if (this._availabilityGraceTimer) {
+      clearTimeout(this._availabilityGraceTimer);
+      this._availabilityGraceTimer = null;
+    }
     if (this._availabilityTimer) {
       clearInterval(this._availabilityTimer);
       this._availabilityTimer = null;
