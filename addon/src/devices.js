@@ -93,24 +93,55 @@ class DeviceManager {
     // coordinator startup to trigger proper per-endpoint attribute reporting.
     // Without this, some Tuya devices report ALL endpoints together instead of
     // only the changed endpoint, causing all gangs to appear to toggle at once.
-    // We fire these in the background so startup is not blocked.
+    //
+    // IMPORTANT: configure calls are serialised with a 3 s gap between each
+    // device (matching ioBroker.zigbee's 5 s approach, Z2M uses 10 s).
+    // Firing all at once floods the coordinator's ZCL transmit queue, which
+    // causes a cascade of NWK_NO_ROUTE (0xcd / 205) errors during startup even
+    // when the mesh is healthy.  EndDevices are skipped entirely at startup —
+    // they are likely sleeping and will be configured on their first message
+    // (onDeviceAnnounce / onMessage).
     const coordEp = this.zigbee.getCoordinatorEndpoint();
-    for (const { rawDevice, definition } of resolved) {
-      if (!definition || typeof definition.configure !== 'function') continue;
-      // Skip battery-powered end devices — they're likely asleep
+    const CONFIGURE_INTER_DEVICE_DELAY_MS = 3000;
+
+    // Build the list: Routers first, then mains-powered EndDevices,
+    // battery/unknown EndDevices are excluded.
+    const toConfigureAtStartup = resolved.filter(({ rawDevice, definition }) => {
+      if (!definition || typeof definition.configure !== 'function') return false;
+      if (rawDevice.type === 'EndDevice') return false; // skip — sleeping, configure on first message
       const isMainsPowered = rawDevice.powerSource === 'Mains (single phase)'
                           || rawDevice.powerSource === 'Mains (3 phase)';
-      if (!isMainsPowered) continue;
-      const ieee = rawDevice.ieeeAddr;
-      (async () => {
+      return isMainsPowered;
+    });
+
+    // Run serially in the background — doesn't block startup.
+    (async () => {
+      for (let i = 0; i < toConfigureAtStartup.length; i++) {
+        if (i > 0) await new Promise(r => setTimeout(r, CONFIGURE_INTER_DEVICE_DELAY_MS));
+        const { rawDevice, definition } = toConfigureAtStartup[i];
+        const ieee = rawDevice.ieeeAddr;
+
+        // Skip reconfigure if device was already configured with this
+        // definition version in a previous session (prevents unnecessary
+        // ZCL traffic on clean restarts, mirrors Z2M / ioBroker behaviour).
+        const definitionVersion = definition.version ?? '0.0.0';
+        if (rawDevice.meta?.configured === definitionVersion) {
+          this.log.debug(`[devices] Startup configure for ${ieee} skipped — already at version ${definitionVersion}`);
+          continue;
+        }
+
         try {
           await definition.configure(rawDevice, coordEp, definition);
+          // Persist the configured version so we can skip next time
+          if (!rawDevice.meta) rawDevice.meta = {};
+          rawDevice.meta.configured = definitionVersion;
+          rawDevice.save?.();
           this.log.info(`[devices] Startup configure for ${ieee} succeeded`);
         } catch (err) {
           this.log.debug(`[devices] Startup configure for ${ieee} skipped: ${err.message}`);
         }
-      })();
-    }
+      }
+    })();
 
     // Start availability polling for mains-powered devices.
     // Delay the first check by the startup grace period so the Zigbee mesh
@@ -187,10 +218,19 @@ class DeviceManager {
 
     // Auto-configure attribute reporting on announce so the device
     // immediately reports its current state (state-read-on-reconnect).
+    // Always reconfigure on announce regardless of version — the device just
+    // (re-)joined the mesh, so its reporting binds may have been lost.
     if (definition && typeof definition.configure === 'function') {
+      // Clear the persisted version so the startup-configure version check
+      // doesn't skip this device on the next restart after an announce.
+      if (rawDevice.meta) delete rawDevice.meta.configured;
       try {
         const coordEp = this.zigbee.getCoordinatorEndpoint();
         await definition.configure(rawDevice, coordEp, definition);
+        const definitionVersion = definition.version ?? '0.0.0';
+        if (!rawDevice.meta) rawDevice.meta = {};
+        rawDevice.meta.configured = definitionVersion;
+        rawDevice.save?.();
         this.log.info(`[devices] Auto-configured reporting for ${ieee} on announce`);
       } catch (err) {
         this.log.debug(`[devices] Auto-configure skipped for ${ieee}: ${err.message}`);
@@ -265,6 +305,29 @@ class DeviceManager {
       this.emit('availability_changed', { ieee_address, available: true });
     }
     this._availability.set(ieee_address, avail);
+
+    // Configure-on-first-message for EndDevices (mirrors Z2M / ioBroker behaviour).
+    // EndDevices are skipped at startup configure because they are likely sleeping.
+    // When they send their first message after startup they are awake, so run
+    // configure now if it hasn't been done yet for the current definition version.
+    const rawDeviceForConfigure = this._rawDevices.get(ieee_address);
+    if (rawDeviceForConfigure && rawDeviceForConfigure.type === 'EndDevice') {
+      const defForConfigure = this._definitions.get(ieee_address);
+      if (defForConfigure && typeof defForConfigure.configure === 'function') {
+        const definitionVersion = defForConfigure.version ?? '0.0.0';
+        if (rawDeviceForConfigure.meta?.configured !== definitionVersion) {
+          const coordEp = this.zigbee.getCoordinatorEndpoint();
+          defForConfigure.configure(rawDeviceForConfigure, coordEp, defForConfigure)
+            .then(() => {
+              if (!rawDeviceForConfigure.meta) rawDeviceForConfigure.meta = {};
+              rawDeviceForConfigure.meta.configured = definitionVersion;
+              rawDeviceForConfigure.save?.();
+              this.log.info(`[devices] Configured ${ieee_address} on first message`);
+            })
+            .catch(err => this.log.debug(`[devices] Configure-on-message skipped for ${ieee_address}: ${err.message}`));
+        }
+      }
+    }
 
     let definition = this._definitions.get(ieee_address);
 
