@@ -17,11 +17,29 @@ class RingBufferTransport extends Transport {
   constructor(opts) { super(opts); }
 
   log(info, callback) {
+    // Extract channel from the leading [xxx] prefix in the message (e.g. "[devices] ...")
+    const _msg = info.message ?? '';
+    const chanMatch = _msg.match(/^\[([^\]]+)\]/);
+    const rawChan   = chanMatch?.[1] ?? 'system';
+    const CHAN_MAP  = {
+      main:      'system',
+      zigbee:    'network',
+      devices:   'devices',
+      ws:        'websocket',
+      avail:     'availability',
+      configure: 'configure',
+      command:   'command',
+      message:   'messages',
+      event:     'system',
+    };
+    const channel = CHAN_MAP[rawChan] ?? rawChan;
+
     const entry = {
-      ts:    info.timestamp ?? new Date().toISOString(),
+      ts:      info.timestamp ?? new Date().toISOString(),
       // Symbol.for('level') holds the raw (un-colourised) level string in Winston 3
-      level: info[Symbol.for('level')] ?? info.level ?? 'info',
-      msg:   info.message ?? '',
+      level:   info[Symbol.for('level')] ?? info.level ?? 'info',
+      channel,
+      msg:     _msg,
     };
     _logBuffer.push(entry);
     if (_logBuffer.length > LOG_BUFFER_MAX) _logBuffer.shift();

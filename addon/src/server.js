@@ -199,14 +199,19 @@ async function main() {
 
     if (nvramTimer) clearInterval(nvramTimer);
 
+    log.info('[main] Shutdown: stopping WebSocket server');
     wsApi.stop();
+
+    log.info('[main] Shutdown: stopping device manager');
     devices.stop();
 
     // Final NVRam backup before shutting down coordinator
     if (config.nvram_backup) {
+      log.info('[main] Shutdown: saving NVRam backup');
       try { await zigbee.backup(); } catch {}
     }
 
+    log.info('[main] Shutdown: stopping coordinator');
     await zigbee.stop();
     log.info('[main] Shutdown complete');
     process.exit(0);

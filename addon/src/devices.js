@@ -120,7 +120,12 @@ class DeviceManager {
 
     // Run serially in the background — doesn't block startup.
     (async () => {
-      for (let i = 0; i < toConfigureAtStartup.length; i++) {
+      const N = toConfigureAtStartup.length;
+      if (N > 0) {
+        this.log.info(`[configure] Queued ${N} device(s) for startup configure`);
+      }
+      let succeeded = 0;
+      for (let i = 0; i < N; i++) {
         if (i > 0) await new Promise(r => setTimeout(r, CONFIGURE_INTER_DEVICE_DELAY_MS));
         const { rawDevice, definition } = toConfigureAtStartup[i];
         const ieee = rawDevice.ieeeAddr;
@@ -132,10 +137,11 @@ class DeviceManager {
         // "magic packet" genBasic read on each coordinator restart regardless.
         const definitionVersion = definition.version ?? null;
         if (definitionVersion && rawDevice.meta?.configured === definitionVersion) {
-          this.log.debug(`[devices] Startup configure for ${ieee} skipped — already at version ${definitionVersion}`);
+          this.log.debug(`[configure] ${ieee} (${definition.model ?? '?'}) [${i+1}/${N}] — skipped, already at version ${definitionVersion}`);
           continue;
         }
 
+        this.log.info(`[configure] Configuring ${ieee} (${definition.model ?? '?'}) [${i+1}/${N}]`);
         try {
           await definition.configure(rawDevice, coordEp, definition);
           // Persist the configured version so we can skip next time
@@ -143,10 +149,14 @@ class DeviceManager {
           if (definitionVersion) rawDevice.meta.configured = definitionVersion;
           rawDevice.save?.();
           this._configuredThisSession.add(ieee); // prevent configure-on-message re-trigger
-          this.log.info(`[devices] Startup configure for ${ieee} succeeded`);
+          succeeded++;
+          this.log.info(`[configure] ${ieee} (${definition.model ?? '?'}) [${i+1}/${N}] — OK`);
         } catch (err) {
-          this.log.debug(`[devices] Startup configure for ${ieee} skipped: ${err.message}`);
+          this.log.debug(`[configure] ${ieee} (${definition.model ?? '?'}) [${i+1}/${N}] — skipped: ${err.message}`);
         }
+      }
+      if (N > 0) {
+        this.log.info(`[configure] Startup configure complete — ${succeeded}/${N} succeeded`);
       }
     })();
 
@@ -156,8 +166,10 @@ class DeviceManager {
     // Without this, mains-powered devices lacking a direct coordinator route
     // go unavailable within 60s of startup even when the network key is correct.
     const graceMs = (this.config.startup_grace_period ?? 120) * 1000;
+    this.log.info(`[avail] Startup grace period — first availability check in ${graceMs / 1000}s`);
     this._availabilityGraceTimer = setTimeout(() => {
       this._availabilityGraceTimer = null;
+      this.log.info('[avail] Grace period expired — starting availability checks');
       this._availabilityTimer = setInterval(
         () => this._checkAvailability(),
         this.config.availability_ping_interval * 1000
@@ -303,6 +315,9 @@ class DeviceManager {
    */
   onMessage(msg) {
     const { ieee_address, cluster, data, link_quality, endpoint_id } = msg;
+
+    const _model = this._definitions.get(ieee_address)?.model ?? '?';
+    this.log.debug(`[message] ← ${ieee_address} (${_model}) ${cluster}/${msg.type ?? '?'} ep=${endpoint_id ?? 0} lqi=${link_quality ?? '?'}`);
 
     // Update last_seen and availability
     const avail = this._availability.get(ieee_address) ?? {};
@@ -668,6 +683,9 @@ class DeviceManager {
 
     const errors = [];
 
+    const _model2 = this._definitions.get(ieee_address)?.model ?? '?';
+    this.log.debug(`[command] → ${ieee_address} (${_model2}) ${JSON.stringify(payload).substring(0, 120)}`);
+
     for (let attempt = 1; attempt <= this.config.command_retries; attempt++) {
       try {
         let converterRan = false;
@@ -748,6 +766,7 @@ class DeviceManager {
 
         // Wait for state confirmation (resolves with current state on timeout)
         const confirmed = await this._waitForConfirmation(ieee_address, payload);
+        this.log.debug(`[command] ✓ ${ieee_address} (${_model2}) confirmed on attempt ${attempt}`);
         return confirmed;
 
       } catch (err) {
@@ -784,18 +803,24 @@ class DeviceManager {
         // sensors, and remotes to appear offline after a quiet evening.
       } else {
         // Mains devices: actively ping the device itself (not just the coordinator)
+        const modelLabel = this._definitions.get(ieee_address)?.model ?? device.model_id ?? '?';
+        this.log.debug(`[avail] Pinging ${ieee_address} (${modelLabel})`);
         try {
           const latency = await this.zigbee.pingDevice(ieee_address);
+          this.log.debug(`[avail] ${ieee_address} (${modelLabel}) — online ${latency}ms`);
           avail.last_seen = Date.now();
           if (!avail.available) {
             avail.available = true;
             this._availability.set(ieee_address, avail);
+            this.log.info(`[avail] ${ieee_address} (${modelLabel}) came back online (${latency}ms)`);
             this.emit('availability_changed', { ieee_address, available: true, latency });
           }
         } catch {
+          this.log.debug(`[avail] ${ieee_address} (${modelLabel}) — ping failed`);
           if (avail.available) {
             avail.available = false;
             this._availability.set(ieee_address, avail);
+            this.log.warn(`[avail] ${ieee_address} (${modelLabel}) went offline`);
             this.emit('availability_changed', { ieee_address, available: false });
           }
         }

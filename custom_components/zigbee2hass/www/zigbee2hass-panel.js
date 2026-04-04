@@ -37,6 +37,8 @@ class Zigbee2HASSPanel extends HTMLElement {
       this._logSub           = null;  // HA event unsubscription for log_entry
       this._logMinLevel      = 'info'; // current display level filter
       this._logsFetched      = false; // have we fetched the initial buffer yet
+      // Channels shown by default — 'messages' is noisy so unchecked by default
+      this._logChannels      = new Set(['system','network','devices','websocket','availability','configure','command']);
       this._setup();
       this._fullLoad();
       this._startPolling();
@@ -740,6 +742,23 @@ class Zigbee2HASSPanel extends HTMLElement {
         .log-level-error .log-msg { color:#f56c6c; }
         .log-level-warn  .log-msg { color:#f5c542; }
         .log-level-debug .log-msg { color:#888; }
+        /* Channel badges */
+        .log-chan { font-size:0.65rem; font-weight:600; padding:1px 4px; border-radius:3px; white-space:nowrap; flex-shrink:0; opacity:0.9; }
+        .log-chan-system       { background:#2a2a2a; color:#888; }
+        .log-chan-network      { background:#0d2a4a; color:#5ba3e0; }
+        .log-chan-devices      { background:#0d2a2a; color:#3db8b8; }
+        .log-chan-websocket    { background:#251a3d; color:#a06af5; }
+        .log-chan-availability { background:#2e1a00; color:#e08a30; }
+        .log-chan-configure    { background:#0d2a0d; color:#4db84d; }
+        .log-chan-command      { background:#2a2000; color:#c4a020; }
+        .log-chan-messages     { background:#1e1e1e; color:#666; }
+        /* Channel filter checkboxes */
+        .log-chan-filters { display:flex; flex-wrap:wrap; gap:6px; align-items:center; padding:4px 0; }
+        .log-chan-filter-label {
+          display:inline-flex; align-items:center; gap:3px;
+          font-size:0.75rem; cursor:pointer; user-select:none;
+        }
+        .log-chan-filter-label input[type=checkbox] { margin:0; cursor:pointer; }
       </style>
 
       <div class="header">
@@ -1952,6 +1971,20 @@ class Zigbee2HASSPanel extends HTMLElement {
   _renderLog() {
     const content = this.shadowRoot.getElementById('content');
     if (!content.querySelector('#log-container')) {
+      const ALL_CHANNELS = [
+        { id: 'system',       label: 'System'   },
+        { id: 'network',      label: 'Network'  },
+        { id: 'devices',      label: 'Devices'  },
+        { id: 'websocket',    label: 'WebSocket'},
+        { id: 'availability', label: 'Avail'    },
+        { id: 'configure',    label: 'Configure'},
+        { id: 'command',      label: 'Commands' },
+        { id: 'messages',     label: 'Messages' },
+      ];
+      const chanChecks = ALL_CHANNELS.map(c => {
+        const checked = this._logChannels.has(c.id) ? 'checked' : '';
+        return `<label class="log-chan-filter-label"><input type="checkbox" data-chan="${c.id}" ${checked}><span class="log-chan log-chan-${c.id}">${c.label}</span></label>`;
+      }).join('');
       content.innerHTML = `
         <div class="log-toolbar">
           <label for="log-level-filter">Min level:</label>
@@ -1964,6 +1997,7 @@ class Zigbee2HASSPanel extends HTMLElement {
           <button class="btn-ghost btn-sm" id="btn-log-clear">Clear</button>
           <span class="log-count" id="log-count"></span>
         </div>
+        <div class="log-chan-filters" id="log-chan-filters">${chanChecks}</div>
         <div class="log-container" id="log-container"></div>
       `;
       content.querySelector('#btn-log-clear').addEventListener('click', () => {
@@ -1972,6 +2006,13 @@ class Zigbee2HASSPanel extends HTMLElement {
       });
       content.querySelector('#log-level-filter').addEventListener('change', (e) => {
         this._logMinLevel = e.target.value;
+        this._renderLogEntries();
+      });
+      content.querySelector('#log-chan-filters').addEventListener('change', (e) => {
+        const cb = e.target;
+        if (cb.type !== 'checkbox' || !cb.dataset.chan) return;
+        if (cb.checked) this._logChannels.add(cb.dataset.chan);
+        else            this._logChannels.delete(cb.dataset.chan);
         this._renderLogEntries();
       });
       // Restore saved level filter selection
@@ -2000,16 +2041,23 @@ class Zigbee2HASSPanel extends HTMLElement {
     if (!container) return;
     const LEVELS = ['debug', 'info', 'warn', 'error'];
     const minIdx = LEVELS.indexOf(this._logMinLevel ?? 'info');
-    const filtered = this._logs.filter(e => LEVELS.indexOf(e.level ?? 'info') >= minIdx);
+    const filtered = this._logs.filter(e => {
+      if (LEVELS.indexOf(e.level ?? 'info') < minIdx) return false;
+      const chan = e.channel ?? 'system';
+      if (!this._logChannels.has(chan)) return false;
+      return true;
+    });
     const countEl  = this.shadowRoot.getElementById('log-count');
     if (countEl) countEl.textContent = `${filtered.length} entr${filtered.length === 1 ? 'y' : 'ies'}`;
     const atBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 20;
     container.innerHTML = filtered.map(e => {
       const level = this._escHtml(e.level ?? 'info');
+      const chan  = this._escHtml(e.channel ?? 'system');
       const ts    = this._escHtml((e.ts ?? '').replace('T', ' ').replace(/\.\d+Z$/, ''));
       const msg   = this._escHtml(e.msg ?? '');
       return `<div class="log-entry log-level-${level}">`
            + `<span class="log-ts">${ts}</span>`
+           + `<span class="log-chan log-chan-${chan}">${chan}</span>`
            + `<span class="log-badge log-badge-${level}">${level.toUpperCase()}</span>`
            + `<span class="log-msg">${msg}</span>`
            + `</div>`;
@@ -2026,22 +2074,29 @@ class Zigbee2HASSPanel extends HTMLElement {
     // Incremental DOM append — avoids re-rendering all entries on every message
     const LEVELS = ['debug', 'info', 'warn', 'error'];
     const minIdx = LEVELS.indexOf(this._logMinLevel ?? 'info');
-    if (LEVELS.indexOf(data.level ?? 'info') < minIdx) return; // filtered out
+    if (LEVELS.indexOf(data.level ?? 'info') < minIdx) return; // filtered out by level
+    const chan = data.channel ?? 'system';
+    if (!this._logChannels.has(chan)) return; // filtered out by channel
     const container = this.shadowRoot.getElementById('log-container');
     if (!container) return;
     const atBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 20;
     const level = this._escHtml(data.level ?? 'info');
+    const chanE = this._escHtml(chan);
     const ts    = this._escHtml((data.ts ?? '').replace('T', ' ').replace(/\.\d+Z$/, ''));
     const msg   = this._escHtml(data.msg ?? '');
     const div   = document.createElement('div');
     div.className   = `log-entry log-level-${level}`;
     div.innerHTML   = `<span class="log-ts">${ts}</span>`
+                    + `<span class="log-chan log-chan-${chanE}">${chanE}</span>`
                     + `<span class="log-badge log-badge-${level}">${level.toUpperCase()}</span>`
                     + `<span class="log-msg">${msg}</span>`;
     container.appendChild(div);
     const countEl = this.shadowRoot.getElementById('log-count');
     if (countEl) {
-      const filtered = this._logs.filter(e => LEVELS.indexOf(e.level ?? 'info') >= minIdx);
+      const filtered = this._logs.filter(e => {
+        if (LEVELS.indexOf(e.level ?? 'info') < minIdx) return false;
+        return this._logChannels.has(e.channel ?? 'system');
+      });
       countEl.textContent = `${filtered.length} entr${filtered.length === 1 ? 'y' : 'ies'}`;
     }
     if (atBottom) container.scrollTop = container.scrollHeight;

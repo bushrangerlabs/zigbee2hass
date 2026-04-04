@@ -74,6 +74,15 @@ class ZigbeeController {
     await this.herdsman.start();
 
     this.log.info('[zigbee] Coordinator started');
+
+    // Log coordinator firmware info for diagnostics
+    try {
+      const info = await this.herdsman.getCoordinatorVersion();
+      this.log.info(`[zigbee] Coordinator: ${info.type ?? '?'} rev${info.meta?.revision ?? info.revision ?? '?'}`);
+    } catch (e) {
+      this.log.debug(`[zigbee] Could not read coordinator version: ${e.message}`);
+    }
+
     this._starting = false;
   }
 
