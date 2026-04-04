@@ -1,9 +1,50 @@
 'use strict';
 
+const fs   = require('fs');
 const path = require('path');
 const { Controller } = require('zigbee-herdsman');
 const { getLogger }  = require('./logger');
 const { isNetworkPort } = require('./config');
+
+/**
+ * Extract pan_id and channel from coordinator_backup.json (any known format).
+ *
+ * Supports:
+ *   open-coordinator-backup: { pan_id: "0x84bf", channel: 25, ... }
+ *   old herdsman format:     { networkOptions: { panId: 34015, channelList: [25] } }
+ *
+ * Returns { panId: number|null, channel: number|null }.
+ */
+function readBackupNetworkParams(backupFile, log) {
+  try {
+    const backup = JSON.parse(fs.readFileSync(backupFile, 'utf8'));
+
+    // new open-coordinator-backup format
+    if (backup.pan_id !== undefined && backup.channel !== undefined) {
+      const panId = typeof backup.pan_id === 'string'
+        ? parseInt(backup.pan_id.replace(/^0x/i, ''), 16)
+        : Number(backup.pan_id);
+      const channel = Number(backup.channel);
+      if (panId > 0 && panId < 0xFFFF && channel >= 11 && channel <= 26) {
+        return { panId, channel };
+      }
+    }
+
+    // old herdsman format: { networkOptions: { panId, channelList } }
+    if (backup.networkOptions?.panId && backup.networkOptions?.channelList?.length) {
+      const panId   = Number(backup.networkOptions.panId);
+      const channel = backup.networkOptions.channelList[0];
+      if (panId > 0 && panId < 0xFFFF && channel >= 11 && channel <= 26) {
+        return { panId, channel };
+      }
+    }
+
+    log.debug('[zigbee] coordinator_backup.json present but could not extract pan_id/channel — using config.yaml values');
+  } catch (err) {
+    log.debug(`[zigbee] Could not read coordinator_backup.json for network param override: ${err.message}`);
+  }
+  return { panId: null, channel: null };
+}
 
 /**
  * ZigbeeController wraps zigbee-herdsman's Controller.
@@ -36,6 +77,42 @@ class ZigbeeController {
     const dbPath     = path.join(this.config.data_dir, 'database.db');
     const backupPath = path.join(this.config.data_dir, 'coordinator_backup.json');
 
+    // ── Network parameter reconciliation ─────────────────────────────────
+    // When migrating from Zigbee2MQTT the user's config.yaml almost certainly
+    // has different channel/pan_id values than the actual network (e.g. the
+    // default channel=11, pan_id=0x1a62 vs the real channel=25, pan_id=0x84bf).
+    //
+    // herdsman's determineStrategy() checks configMatchesAdapter (config
+    // channel/panId/key == NVRam NIB/activeKey).  If config != adapter AND
+    // backupMatchesAdapter also fails for any reason, herdsman falls all the
+    // way through to startCommissioning — wiping the NIB and forming a NEW
+    // network with the config values, breaking all devices.
+    //
+    // Fix: read the actual pan_id and channel from coordinator_backup.json
+    // (which reflects the real network since znp_key_sync just validated/
+    // repaired it) and inject them into herdsmanConfig.  This makes
+    // configMatchesAdapter=true and herdsman chooses "startup" directly.
+    //
+    // We only override if the backup has valid, non-default values and the
+    // config.yaml values differ.  Log the override so it is visible.
+    let configPanId   = parseInt(this.config.pan_id, 16);
+    let configChannel = this.config.channel;
+
+    if (fs.existsSync(backupPath)) {
+      const { panId: backupPanId, channel: backupChannel } = readBackupNetworkParams(backupPath, this.log);
+      if (backupPanId && backupChannel) {
+        if (backupPanId !== configPanId || backupChannel !== configChannel) {
+          this.log.info(
+            `[zigbee] Network param override from coordinator_backup.json: ` +
+            `channel ${configChannel}→${backupChannel}, ` +
+            `pan_id 0x${configPanId.toString(16)}→0x${backupPanId.toString(16)}`
+          );
+          configPanId   = backupPanId;
+          configChannel = backupChannel;
+        }
+      }
+    }
+
     // Build serialPort config — baudrate/rtscts only apply to USB, not TCP/mDNS
     const networkCoord = isNetworkPort(this.config.serial_port);
     const serialPort = {
@@ -65,8 +142,8 @@ class ZigbeeController {
         forceStartWithInconsistentAdapterConfiguration: true,
       },
       network: {
-        panID:        parseInt(this.config.pan_id, 16),
-        channelList:  [this.config.channel],
+        panID:        configPanId,
+        channelList:  [configChannel],
         networkKey:   this._resolveNetworkKey(),
       },
     };
