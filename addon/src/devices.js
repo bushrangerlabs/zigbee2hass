@@ -125,6 +125,8 @@ class DeviceManager {
         this.log.info(`[configure] Queued ${N} device(s) for startup configure`);
       }
       let succeeded = 0;
+      let failed = 0;
+      let skipped = 0;
       for (let i = 0; i < N; i++) {
         if (i > 0) await new Promise(r => setTimeout(r, CONFIGURE_INTER_DEVICE_DELAY_MS));
         const { rawDevice, definition } = toConfigureAtStartup[i];
@@ -138,6 +140,7 @@ class DeviceManager {
         const definitionVersion = definition.version ?? null;
         if (definitionVersion && rawDevice.meta?.configured === definitionVersion) {
           this.log.debug(`[configure] ${ieee} (${definition.model ?? '?'}) [${i+1}/${N}] — skipped, already at version ${definitionVersion}`);
+          skipped++;
           continue;
         }
 
@@ -152,11 +155,15 @@ class DeviceManager {
           succeeded++;
           this.log.info(`[configure] ${ieee} (${definition.model ?? '?'}) [${i+1}/${N}] — OK`);
         } catch (err) {
-          this.log.debug(`[configure] ${ieee} (${definition.model ?? '?'}) [${i+1}/${N}] — skipped: ${err.message}`);
+          failed++;
+          this.log.warn(`[configure] ${ieee} (${definition.model ?? '?'}) [${i+1}/${N}] — FAILED: ${err.message}`);
         }
       }
       if (N > 0) {
-        this.log.info(`[configure] Startup configure complete — ${succeeded}/${N} succeeded`);
+        const parts = [`${succeeded}/${N} succeeded`];
+        if (failed > 0) parts.push(`${failed} failed`);
+        if (skipped > 0) parts.push(`${skipped} skipped`);
+        this.log.info(`[configure] Startup configure complete — ${parts.join(', ')}`);
       }
     })();
 
