@@ -30,6 +30,7 @@ const DEFAULTS = {
   availability_ping_interval: 60,       // seconds between pings for mains devices
   availability_ping_failures: 2,        // consecutive ping failures before marking a device offline
   startup_grace_period:     300,        // seconds before first availability ping (allow mesh to rebuild after restart)
+  startup_command_holdoff:  300,        // seconds to queue set_state commands for offline devices instead of sending immediately (0 = disabled)
   command_timeout:          5000,       // ms to wait for command ack
   command_retries:          3,
   command_retry_delay:      500,        // ms base delay between command retries (multiplied by attempt number)

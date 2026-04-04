@@ -46,6 +46,12 @@ class DeviceManager {
     this._configuredThisSession = new Set();
     /** @type {Set<string>} ieee addresses whose startup configure failed — retry on next availability recovery */
     this._configureFailedAtStartup = new Set();
+    /** @type {Map<string, object>} ieee → merged pending payload queued during startup holdoff */
+    this._startupCommandQueue  = new Map();
+    /** @type {boolean} true while startup command holdoff is active */
+    this._startupHoldoffActive = false;
+    /** @type {NodeJS.Timeout|null} */
+    this._startupHoldoffTimer  = null;
     /** @type {Map<string, NodeJS.Timeout>} "ieee:property" → reset timer for auto-clearing binary states */
     this._occupancyTimers = new Map();
 
@@ -187,9 +193,27 @@ class DeviceManager {
       // Run immediately once the grace period expires
       this._checkAvailability();
     }, graceMs);
+
+    // Startup command holdoff — queue set_state commands for offline devices
+    // instead of sending them immediately (HA restore-state fires within seconds
+    // of startup, before mesh routes have rebuilt). Commands are dispatched as
+    // soon as each device pings back online; any still-queued at holdoff expiry
+    // are force-dispatched so nothing is silently dropped.
+    const holdoffMs = (this.config.startup_command_holdoff ?? 300) * 1000;
+    if (holdoffMs > 0) {
+      this._startupHoldoffActive = true;
+      this.log.info(`[command] Startup holdoff active — commands to offline devices queued for up to ${holdoffMs / 1000}s`);
+      this._startupHoldoffTimer = setTimeout(() => this._endStartupHoldoff(), holdoffMs);
+    }
   }
 
   stop() {
+    if (this._startupHoldoffTimer) {
+      clearTimeout(this._startupHoldoffTimer);
+      this._startupHoldoffTimer  = null;
+      this._startupHoldoffActive = false;
+      this._startupCommandQueue.clear();
+    }
     if (this._availabilityGraceTimer) {
       clearTimeout(this._availabilityGraceTimer);
       this._availabilityGraceTimer = null;
@@ -335,6 +359,9 @@ class DeviceManager {
     if (!avail.available) {
       avail.available = true;
       this.emit('availability_changed', { ieee_address, available: true });
+      // Device just came alive via a message — flush any commands queued
+      // during the startup holdoff (e.g. HA restore-state commands)
+      this._flushStartupCommandQueue(ieee_address);
     }
     this._availability.set(ieee_address, avail);
 
@@ -668,6 +695,18 @@ class DeviceManager {
    * @returns {Promise<object>} resolved with confirmed state
    */
   async command(ieee_address, payload) {
+    // During startup holdoff, if the device is not yet reachable, queue the
+    // command and return the current cached state optimistically. HA updates
+    // its state immediately from the reply; the real command fires once the
+    // device pings back online (or when the holdoff window expires).
+    if (this._startupHoldoffActive && !this._availability.get(ieee_address)?.available) {
+      const existing = this._startupCommandQueue.get(ieee_address) ?? {};
+      this._startupCommandQueue.set(ieee_address, { ...existing, ...payload });
+      const model = this._definitions.get(ieee_address)?.model ?? '?';
+      this.log.info(`[command] ${ieee_address} (${model}) queued during startup holdoff — will dispatch when device recovers`);
+      return this._state.get(ieee_address) ?? {};
+    }
+
     const definition = this._definitions.get(ieee_address);
     if (!definition) throw new Error(`No definition for ${ieee_address}`);
 
@@ -852,6 +891,7 @@ class DeviceManager {
                     rawDeviceForCfg.save?.();
                     this._configuredThisSession.add(ieee_address);
                     this.log.info(`[configure] ${ieee_address} (${modelLabel}) — configure-on-recovery OK`);
+                    this._flushStartupCommandQueue(ieee_address);
                   })
                   .catch(err => {
                     this._configureFailedAtStartup.add(ieee_address); // allow retry on next recovery
@@ -877,7 +917,39 @@ class DeviceManager {
     }
   }
 
-  // ── Private helpers ───────────────────────────────────────────────────────
+  /**
+   * Flush any startup-holdoff-queued command for a single device.
+   * Called when the device is first confirmed reachable (ping or message).
+   */
+  _flushStartupCommandQueue(ieee_address) {
+    if (!this._startupCommandQueue.has(ieee_address)) return;
+    const payload = this._startupCommandQueue.get(ieee_address);
+    this._startupCommandQueue.delete(ieee_address);
+    const model = this._definitions.get(ieee_address)?.model ?? '?';
+    this.log.info(`[command] ${ieee_address} (${model}) — dispatching queued startup command: ${JSON.stringify(payload).substring(0, 80)}`);
+    this.command(ieee_address, payload).catch(err => {
+      this.log.warn(`[command] ${ieee_address} (${model}) — queued startup command failed: ${err.message}`);
+    });
+  }
+
+  /**
+   * Called when the startup holdoff window expires.
+   * Force-dispatches any commands still queued (devices that never pinged back).
+   */
+  _endStartupHoldoff() {
+    this._startupHoldoffTimer  = null;
+    this._startupHoldoffActive = false;
+    if (this._startupCommandQueue.size > 0) {
+      this.log.info(`[command] Startup holdoff expired — force-dispatching ${this._startupCommandQueue.size} queued command(s)`);
+      for (const ieee_address of [...this._startupCommandQueue.keys()]) {
+        this._flushStartupCommandQueue(ieee_address);
+      }
+    } else {
+      this.log.info('[command] Startup holdoff expired — no queued commands');
+    }
+  }
+
+  // ── Availability polling ─────────────────────────────────────────────────
 
   _waitForConfirmation(ieee_address, expectedPayload) {
     return new Promise((resolve, reject) => {

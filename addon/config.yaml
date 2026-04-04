@@ -1,6 +1,6 @@
 name: "Zigbee2HASS"
 description: "Reliable Zigbee for Home Assistant via zigbee-herdsman. No MQTT required."
-version: "0.1.78"
+version: "0.1.79"
 slug: "zigbee2hass"
 url: "https://github.com/bushrangerlabs/zigbee2hass"
 arch:
@@ -33,6 +33,7 @@ options:
   availability_ping_interval: 60
   availability_ping_failures: 2
   startup_grace_period: 300
+  startup_command_holdoff: 300
   command_timeout: 5000
   command_retries: 3
   command_retry_delay: 500
@@ -61,6 +62,7 @@ schema:
   availability_ping_interval: int
   availability_ping_failures: "int(1,10)"
   startup_grace_period: int
+  startup_command_holdoff: int
   command_timeout: int
   command_retries: "int(1,10)"
   command_retry_delay: int
