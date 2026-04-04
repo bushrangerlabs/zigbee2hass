@@ -25,6 +25,14 @@ class Z2MMigration {
 
   /**
    * Check if a Z2M backup exists at the expected path and copy it.
+   * Also extracts the network key from the backup and writes network_key.json
+   * so that _resolveNetworkKey() (in zigbee.js) loads the correct key on the
+   * next startup instead of generating a fresh random key.
+   *
+   * Without this, the ZStack adapter sees configured_key != coordinator_active_key
+   * and throws "startup failed - configuration-adapter mismatch", causing the
+   * add-on to crash before any device can communicate.
+   *
    * @param {string} z2mBackupPath  - path to Z2M coordinator_backup.json
    * @returns {boolean} true if imported
    */
@@ -52,6 +60,44 @@ class Z2MMigration {
 
       fs.writeFileSync(destPath, JSON.stringify(backup, null, 2), 'utf8');
       this.log.info(`[migration] Coordinator backup imported to ${destPath}`);
+
+      // Log network parameters from the backup so the user can verify
+      // their config.yaml channel and pan_id match the imported network.
+      const backupChannel = backup.channel ?? backup.channels?.[0];
+      const backupPanId   = backup.pan_id;
+      if (backupChannel || backupPanId) {
+        this.log.info(`[migration] Backup network: channel=${backupChannel ?? '?'}, pan_id=${backupPanId ?? '?'} — ensure these match your config.yaml`);
+      }
+
+      // ── Extract and persist the network key ─────────────────────────────
+      // coordinator_backup.json uses the Universal Zigbee Backup Interchange
+      // (UZBI) format where the network key is stored as a lowercase hex string
+      // at backup.network_key.key (e.g. "01030507090b0d0f00020406080a0c0d").
+      //
+      // zigbee.js _resolveNetworkKey() reads/writes network_key.json as a
+      // 16-element JSON number array.  If network_key.json doesn't exist,
+      // _resolveNetworkKey() generates a NEW random key — which won't match
+      // the coordinator's actual key — causing a hard "configuration-adapter
+      // mismatch" throw in the ZStack adapter on first startup after migration.
+      const rawKey = backup.network_key?.key;
+      if (rawKey && typeof rawKey === 'string' && rawKey.length === 32) {
+        // Hex string → byte array
+        const keyArray = [];
+        for (let i = 0; i < 32; i += 2) {
+          keyArray.push(parseInt(rawKey.substring(i, i + 2), 16));
+        }
+        const keyFilePath = path.join(this.config.data_dir, 'network_key.json');
+        fs.writeFileSync(keyFilePath, JSON.stringify(keyArray), 'utf8');
+        this.log.info('[migration] Network key extracted from backup and saved to network_key.json');
+      } else if (Array.isArray(rawKey) && rawKey.length === 16) {
+        // Some herdsman versions write the key as a number array directly
+        const keyFilePath = path.join(this.config.data_dir, 'network_key.json');
+        fs.writeFileSync(keyFilePath, JSON.stringify(rawKey), 'utf8');
+        this.log.info('[migration] Network key extracted from backup (array form) and saved to network_key.json');
+      } else {
+        this.log.warn('[migration] Could not extract network key from backup — devices may not communicate after migration. Check config.yaml network_key matches your Z2M network key.');
+      }
+
       return true;
     } catch (err) {
       this.log.error(`[migration] Failed to import coordinator backup: ${err.message}`);
@@ -186,6 +232,19 @@ class Z2MMigration {
           const dest = path.join(this.config.data_dir, 'coordinator_backup.json');
           fs.writeFileSync(dest, JSON.stringify(backup, null, 2), 'utf8');
           this.log.info(`[migration] coordinator_backup.json written to ${dest}`);
+          // Extract and persist network key — same logic as importCoordinatorBackup()
+          const rawKey = backup.network_key?.key;
+          if (rawKey && typeof rawKey === 'string' && rawKey.length === 32) {
+            const keyArray = [];
+            for (let i = 0; i < 32; i += 2) keyArray.push(parseInt(rawKey.substring(i, i + 2), 16));
+            fs.writeFileSync(path.join(this.config.data_dir, 'network_key.json'), JSON.stringify(keyArray), 'utf8');
+            this.log.info('[migration] Network key extracted from uploaded backup and saved to network_key.json');
+          } else if (Array.isArray(rawKey) && rawKey.length === 16) {
+            fs.writeFileSync(path.join(this.config.data_dir, 'network_key.json'), JSON.stringify(rawKey), 'utf8');
+            this.log.info('[migration] Network key extracted from uploaded backup (array) and saved to network_key.json');
+          } else {
+            this.log.warn('[migration] Could not extract network key from uploaded backup — manual config.yaml update may be required');
+          }
           results.coordinator_backup = true;
         }
       } catch (err) {

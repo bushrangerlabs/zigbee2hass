@@ -71,7 +71,19 @@ class ZigbeeController {
     this.herdsman = new Controller(herdsmanConfig, this.log);
     this._attachEvents();
 
-    await this.herdsman.start();
+    try {
+      await this.herdsman.start();
+    } catch (err) {
+      // Detect the ZStack "configuration-adapter mismatch" error and give
+      // actionable guidance. This most commonly happens after a Z2M migration
+      // if network_key.json was not updated to match coordinator_backup.json.
+      if (err.message && err.message.includes('configuration-adapter mismatch')) {
+        this.log.error('[zigbee] Coordinator configuration mismatch — the network key, channel, or PAN ID in config.yaml does not match what the coordinator has in its NVRam.');
+        this.log.error('[zigbee] If you just migrated from Zigbee2MQTT, ensure coordinator_backup.json and network_key.json are both present in /data and contain matching keys.');
+        this.log.error('[zigbee] If you replaced coordinator hardware, restore a coordinator_backup.json from your previous coordinator first.');
+      }
+      throw err;
+    }
 
     this.log.info('[zigbee] Coordinator started');
 
