@@ -112,11 +112,13 @@ class Zigbee2HASSClient:
 
         while self._running:
             uri = f"ws://{self._host}:{self._port}"
+            was_connected = False
             try:
                 _LOGGER.debug("Connecting to %s", uri)
                 async with websockets.connect(uri, ping_interval=20, ping_timeout=10) as ws:
                     self._ws        = ws
                     self._connected = True
+                    was_connected   = True
                     delay           = RECONNECT_DELAY_MIN
                     _LOGGER.info("Connected to Zigbee2HASS add-on at %s", uri)
 
@@ -125,8 +127,14 @@ class Zigbee2HASSClient:
 
                     await self._receive_loop(ws)
 
-            except (ConnectionClosed, WebSocketException, OSError) as exc:
+            except (ConnectionClosed, WebSocketException) as exc:
+                # Was connected; lost the connection mid-session.
                 _LOGGER.warning("Zigbee2HASS connection lost: %s", exc)
+            except OSError as exc:
+                # Could not reach the add-on (refused / unreachable / timeout).
+                # This is normal while the add-on is starting up — log at debug
+                # to avoid filling the HA issue log during an add-on restart.
+                _LOGGER.debug("Zigbee2HASS connection failed: %s", exc)
             except Exception as exc:  # noqa: BLE001
                 _LOGGER.error("Unexpected error in connection loop: %s", exc)
             finally:
@@ -138,11 +146,17 @@ class Zigbee2HASSClient:
                         future.set_exception(ConnectionError("Disconnected"))
                 self._pending.clear()
 
-                if self._on_disconnected:
+                # Only fire _on_disconnected if we actually had an active
+                # connection — avoids spamming coordinator warnings on
+                # every failed reconnect attempt while the add-on is down.
+                if was_connected and self._on_disconnected:
                     self._on_disconnected()
 
             if self._running:
-                _LOGGER.info("Reconnecting in %ds...", delay)
+                if was_connected:
+                    _LOGGER.info("Reconnecting in %ds...", delay)
+                else:
+                    _LOGGER.debug("Retrying in %ds...", delay)
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, RECONNECT_DELAY_MAX)
 
