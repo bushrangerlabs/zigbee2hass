@@ -52,6 +52,8 @@ class DeviceManager {
     this._startupHoldoffActive = false;
     /** @type {NodeJS.Timeout|null} */
     this._startupHoldoffTimer  = null;
+    /** @type {Set<string>} ieee addresses confirmed reachable this session (message received or ping passed) */
+    this._confirmedReachable = new Set();
     /** @type {Map<string, NodeJS.Timeout>} "ieee:property" → reset timer for auto-clearing binary states */
     this._occupancyTimers = new Map();
 
@@ -202,7 +204,7 @@ class DeviceManager {
     const holdoffMs = (this.config.startup_command_holdoff ?? 300) * 1000;
     if (holdoffMs > 0) {
       this._startupHoldoffActive = true;
-      this.log.info(`[command] Startup holdoff active — commands to offline devices queued for up to ${holdoffMs / 1000}s`);
+      this.log.info(`[command] Startup holdoff active — commands queued for unconfirmed devices for up to ${holdoffMs / 1000}s`);
       this._startupHoldoffTimer = setTimeout(() => this._endStartupHoldoff(), holdoffMs);
     }
   }
@@ -213,6 +215,7 @@ class DeviceManager {
       this._startupHoldoffTimer  = null;
       this._startupHoldoffActive = false;
       this._startupCommandQueue.clear();
+      this._confirmedReachable.clear();
     }
     if (this._availabilityGraceTimer) {
       clearTimeout(this._availabilityGraceTimer);
@@ -359,8 +362,13 @@ class DeviceManager {
     if (!avail.available) {
       avail.available = true;
       this.emit('availability_changed', { ieee_address, available: true });
-      // Device just came alive via a message — flush any commands queued
-      // during the startup holdoff (e.g. HA restore-state commands)
+    }
+    // Track confirmed reachability for holdoff queue.
+    // Flush on first message regardless of prior available state — devices
+    // start as available=true but are only truly confirmed when we hear from them.
+    const wasConfirmed = this._confirmedReachable.has(ieee_address);
+    this._confirmedReachable.add(ieee_address);
+    if (!wasConfirmed) {
       this._flushStartupCommandQueue(ieee_address);
     }
     this._availability.set(ieee_address, avail);
@@ -695,15 +703,17 @@ class DeviceManager {
    * @returns {Promise<object>} resolved with confirmed state
    */
   async command(ieee_address, payload) {
-    // During startup holdoff, if the device is not yet reachable, queue the
-    // command and return the current cached state optimistically. HA updates
-    // its state immediately from the reply; the real command fires once the
-    // device pings back online (or when the holdoff window expires).
-    if (this._startupHoldoffActive && !this._availability.get(ieee_address)?.available) {
+    // During startup holdoff, queue commands for any device not yet confirmed
+    // reachable this session (i.e. hasn't sent a message or passed a ping).
+    // Devices start with available=true by default, so checking availability
+    // is NOT sufficient — we need actual proof of reachability.
+    // HA gets back the current cached state optimistically; the real command
+    // fires once the device confirms reachable (or holdoff expires).
+    if (this._startupHoldoffActive && !this._confirmedReachable.has(ieee_address)) {
       const existing = this._startupCommandQueue.get(ieee_address) ?? {};
       this._startupCommandQueue.set(ieee_address, { ...existing, ...payload });
       const model = this._definitions.get(ieee_address)?.model ?? '?';
-      this.log.info(`[command] ${ieee_address} (${model}) queued during startup holdoff — will dispatch when device recovers`);
+      this.log.info(`[command] ${ieee_address} (${model}) queued during startup holdoff — will dispatch when device confirms reachable`);
       return this._state.get(ieee_address) ?? {};
     }
 
@@ -869,13 +879,18 @@ class DeviceManager {
           this.log.debug(`[avail] ${ieee_address} (${modelLabel}) — online ${latency}ms`);
           avail.last_seen = Date.now();
           avail.failCount = 0; // reset on success
+          const wasConfirmedPing = this._confirmedReachable.has(ieee_address);
+          this._confirmedReachable.add(ieee_address);
           if (!avail.available) {
             avail.available = true;
             this._availability.set(ieee_address, avail);
             this.log.info(`[avail] ${ieee_address} (${modelLabel}) came back online (${latency}ms)`);
             this.emit('availability_changed', { ieee_address, available: true, latency });
 
-            // Retry configure if it failed at startup (route wasn't ready then)
+            // Retry configure if it failed at startup (route wasn't ready then).
+            // Flush queued startup commands after configure completes (so the
+            // device is fully configured before we send state commands).
+            // For devices that didn't fail configure, flush immediately.
             if (this._configureFailedAtStartup.has(ieee_address)) {
               this._configureFailedAtStartup.delete(ieee_address);
               const rawDeviceForCfg = this._rawDevices.get(ieee_address);
@@ -897,8 +912,17 @@ class DeviceManager {
                     this._configureFailedAtStartup.add(ieee_address); // allow retry on next recovery
                     this.log.warn(`[configure] ${ieee_address} (${modelLabel}) — configure-on-recovery FAILED: ${err.message}`);
                   });
+              } else {
+                this._flushStartupCommandQueue(ieee_address);
               }
+            } else {
+              // No configure needed — flush any startup-queued commands directly
+              this._flushStartupCommandQueue(ieee_address);
             }
+          } else if (!wasConfirmedPing) {
+            // Device was already marked available (typical startup default) and
+            // just passed its first ping — flush any holdoff-queued commands now
+            this._flushStartupCommandQueue(ieee_address);
           }
         } catch {
           this.log.debug(`[avail] ${ieee_address} (${modelLabel}) — ping failed`);
