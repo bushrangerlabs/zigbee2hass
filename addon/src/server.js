@@ -22,7 +22,7 @@ const { WebSocketAPI }    = require('./websocket');
 
 async function main() {
   const config = loadConfig();
-  const log    = initLogger(config.log_level);
+  const log    = initLogger(config.log_level, config.log_buffer_size ?? 500);
 
   log.info('=== Zigbee2HASS starting ===');
   log.info(`Serial port: ${config.serial_port}`);
@@ -54,8 +54,8 @@ async function main() {
 
   // Track retries per IEEE address — cleared on success or after max retries
   const interviewRetries = new Map();
-  const MAX_RETRIES    = 3;
-  const RETRY_DELAY_MS = 15000; // 15s — gives sleepy end devices time to wake and poll
+  const MAX_RETRIES    = config.interview_retries ?? 3;
+  const RETRY_DELAY_MS = (config.interview_retry_delay ?? 15) * 1000;
 
   /**
    * Schedule an interview retry for a device that failed to interview.

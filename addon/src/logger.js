@@ -3,9 +3,9 @@
 const { createLogger, format, transports } = require('winston');
 const Transport = require('winston-transport');
 
-// ── In-memory ring buffer (last 500 log entries) ──────────────────────────────
+// ── In-memory ring buffer (configurable size, set during initLogger) ───────────
 
-const LOG_BUFFER_MAX = 500;
+let _logBufferMax = 500;   // overridden in initLogger() from config.log_buffer_size
 const _logBuffer    = [];
 const _logListeners = new Set();
 
@@ -42,7 +42,7 @@ class RingBufferTransport extends Transport {
       msg:     _msg,
     };
     _logBuffer.push(entry);
-    if (_logBuffer.length > LOG_BUFFER_MAX) _logBuffer.shift();
+    if (_logBuffer.length > _logBufferMax) _logBuffer.shift();
     for (const cb of _logListeners) {
       try { cb(entry); } catch (_) { /* never let a listener crash the logger */ }
     }
@@ -68,7 +68,8 @@ let _logger = null;
  * Initialise the global logger. Call once at startup.
  * @param {string} level  - 'debug' | 'info' | 'warning' | 'error'
  */
-function initLogger(level = 'info') {
+function initLogger(level = 'info', bufferSize = 500) {
+  _logBufferMax = bufferSize;
   const winstonLevel = level === 'warning' ? 'warn' : level;
 
   _logger = createLogger({

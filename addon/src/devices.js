@@ -106,7 +106,7 @@ class DeviceManager {
     // they are likely sleeping and will be configured on their first message
     // (onDeviceAnnounce / onMessage).
     const coordEp = this.zigbee.getCoordinatorEndpoint();
-    const CONFIGURE_INTER_DEVICE_DELAY_MS = 3000;
+    const CONFIGURE_INTER_DEVICE_DELAY_MS = this.config.configure_inter_device_delay ?? 3000;
 
     // Build the list: all non-EndDevice devices that have a configure function.
     // EndDevices are excluded because they are likely sleeping at startup and
@@ -793,7 +793,7 @@ class DeviceManager {
         errors.push(err.message);
         this.log.warn(`[devices] Command attempt ${attempt} failed for ${ieee_address}: ${err.message}`);
         if (attempt < this.config.command_retries) {
-          await new Promise(r => setTimeout(r, 500 * attempt));
+          await new Promise(r => setTimeout(r, (this.config.command_retry_delay ?? 500) * attempt));
         }
       }
     }

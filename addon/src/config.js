@@ -32,6 +32,11 @@ const DEFAULTS = {
   startup_grace_period:     300,        // seconds before first availability ping (allow mesh to rebuild after restart)
   command_timeout:          5000,       // ms to wait for command ack
   command_retries:          3,
+  command_retry_delay:      500,        // ms base delay between command retries (multiplied by attempt number)
+  configure_inter_device_delay: 3000,   // ms gap between each device in the startup configure queue
+  interview_retries:        3,          // max re-interview attempts for devices that fail initial interview
+  interview_retry_delay:    15,         // seconds between interview retries
+  log_buffer_size:          500,        // number of log entries kept in the ring buffer (visible in Log tab)
   occupancy_timeout:        90,         // seconds before auto-clearing occupancy/presence (0 = disable)
   nvram_backup:             true,
   nvram_backup_interval:    3600,       // seconds between automatic NVRam backups
