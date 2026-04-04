@@ -88,22 +88,13 @@ class Zigbee2HASSCoordinator:
     async def async_start(self) -> None:
         self._snapshot_event = asyncio.Event()
         await self._client.start()
-        # Wait up to 30s for TCP connect
-        for _ in range(120):
-            if self._client.connected:
-                _LOGGER.debug("Connected to Zigbee2HASS add-on at %s:%s", self.host, self.port)
-                break
-            await asyncio.sleep(0.25)
-        else:
-            raise ConnectionError(f"Timed out waiting for connection to Zigbee2HASS add-on at {self.host}:{self.port}")
-
-        # Wait up to 30s for the device snapshot to arrive so coordinator.devices
-        # is populated before platform async_setup_entry iterates it.
-        try:
-            await asyncio.wait_for(self._snapshot_event.wait(), timeout=30.0)
-            _LOGGER.debug("Device snapshot received — %d devices", len(self.devices))
-        except asyncio.TimeoutError:
-            _LOGGER.warning("Device snapshot not received within 30s; continuing with empty device list")
+        # Connection and device snapshot are handled asynchronously by the
+        # background connection loop and _handle_bridge_devices.  We return
+        # immediately so HA can finish setting up platforms; entities are
+        # registered (or re-registered) when the devices_loaded event fires,
+        # which happens once the add-on is reachable and sends its snapshot.
+        # This prevents ConfigEntryNotReady spam when the add-on is temporarily
+        # unavailable (e.g. restarting, crash-looping).
 
         # Start periodic entity watchdog (30 s initial delay to let all platforms subscribe)
         self._watchdog_task = self.hass.async_create_task(
