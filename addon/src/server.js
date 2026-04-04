@@ -20,6 +20,7 @@ const { ZigbeeController } = require('./zigbee');
 const { DeviceManager }   = require('./devices');
 const { WebSocketAPI }    = require('./websocket');
 const { takeSnapshot }    = require('./snapshot');
+const { syncNetworkKey }  = require('./znp_key_sync');
 
 async function main() {
   const config = loadConfig();
@@ -158,6 +159,13 @@ async function main() {
   // herdsman touches anything. Mirrors ioBroker.zigbee's startup archive.
   // Best-effort — never blocks startup on failure.
   takeSnapshot(config, log);
+
+  // For TCP/network coordinators: read NWK_ACTIVE_KEY_INFO directly from the
+  // coordinator NVRam and sync network_key.json + coordinator_backup.json.
+  // Fixes stale-backup migrations where coordinator_backup.json.network_key
+  // does not match the coordinator's actual active key, causing herdsman to
+  // enter an infinite restoreBackup→commission loop (v0.1.85).
+  await syncNetworkKey(config, log);
 
   try {
     await zigbee.start();

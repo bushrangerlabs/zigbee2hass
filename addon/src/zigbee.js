@@ -58,6 +58,11 @@ class ZigbeeController {
       adapter: {
         disableLED:      this.config.disable_led,
         transmitPower:   this.config.transmit_power,
+        // Allow startup when PRECFGKEY was overwritten by a prior failed
+        // restoreBackup attempt but backupMatchesAdapter is true (active key
+        // matches backup). syncNetworkKey() runs before herdsman to make
+        // backupMatchesAdapter true when a stale backup caused the loop.
+        forceStartWithInconsistentAdapterConfiguration: true,
       },
       network: {
         panID:        parseInt(this.config.pan_id, 16),
