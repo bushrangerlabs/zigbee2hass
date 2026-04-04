@@ -44,6 +44,8 @@ class DeviceManager {
     this._deviceReadyEmitted = new Set();
     /** @type {Set<string>} ieee addresses configured at least once this session (for configure-on-message dedup) */
     this._configuredThisSession = new Set();
+    /** @type {Set<string>} ieee addresses whose startup configure failed — retry on next availability recovery */
+    this._configureFailedAtStartup = new Set();
     /** @type {Map<string, NodeJS.Timeout>} "ieee:property" → reset timer for auto-clearing binary states */
     this._occupancyTimers = new Map();
 
@@ -156,6 +158,7 @@ class DeviceManager {
           this.log.info(`[configure] ${ieee} (${definition.model ?? '?'}) [${i+1}/${N}] — OK`);
         } catch (err) {
           failed++;
+          this._configureFailedAtStartup.add(ieee);
           this.log.warn(`[configure] ${ieee} (${definition.model ?? '?'}) [${i+1}/${N}] — FAILED: ${err.message}`);
         }
       }
@@ -377,6 +380,16 @@ class DeviceManager {
       const rawDevice = this._rawDevices.get(ieee_address)
                      ?? this.zigbee.herdsman?.getDeviceByIeeeAddr(ieee_address);
       if (rawDevice) {
+        // Device has no modelID — interview never completed. Trigger a re-interview
+        // now that the device is awake and sending messages. This covers the case
+        // where a device joined, the coordinator restarted before interview finished,
+        // and the device has sat in the DB with modelID=undefined ever since.
+        if (!rawDevice.modelID && rawDevice.interviewCompleted === false && !rawDevice.interviewing) {
+          this.log.info(`[devices] ${ieee_address} has no modelID — triggering re-interview`);
+          rawDevice.interview().catch(err => {
+            this.log.warn(`[devices] Re-interview for ${ieee_address} failed: ${err.message}`);
+          });
+        }
         this._resolveDefinition(rawDevice).then(def => {
           if (def) {
             this.log.info(`[devices] Late definition resolved for ${ieee_address}: ${def.model ?? '?'}`);
@@ -821,6 +834,30 @@ class DeviceManager {
             this._availability.set(ieee_address, avail);
             this.log.info(`[avail] ${ieee_address} (${modelLabel}) came back online (${latency}ms)`);
             this.emit('availability_changed', { ieee_address, available: true, latency });
+
+            // Retry configure if it failed at startup (route wasn't ready then)
+            if (this._configureFailedAtStartup.has(ieee_address)) {
+              this._configureFailedAtStartup.delete(ieee_address);
+              const rawDeviceForCfg = this._rawDevices.get(ieee_address);
+              const defForCfg = this._definitions.get(ieee_address);
+              if (rawDeviceForCfg && defForCfg && typeof defForCfg.configure === 'function') {
+                this.log.info(`[configure] ${ieee_address} (${modelLabel}) back online — retrying configure`);
+                const coordEp = this.zigbee.getCoordinatorEndpoint();
+                defForCfg.configure(rawDeviceForCfg, coordEp, defForCfg)
+                  .then(() => {
+                    const ver = defForCfg.version ?? null;
+                    if (!rawDeviceForCfg.meta) rawDeviceForCfg.meta = {};
+                    if (ver) rawDeviceForCfg.meta.configured = ver;
+                    rawDeviceForCfg.save?.();
+                    this._configuredThisSession.add(ieee_address);
+                    this.log.info(`[configure] ${ieee_address} (${modelLabel}) — configure-on-recovery OK`);
+                  })
+                  .catch(err => {
+                    this._configureFailedAtStartup.add(ieee_address); // allow retry on next recovery
+                    this.log.warn(`[configure] ${ieee_address} (${modelLabel}) — configure-on-recovery FAILED: ${err.message}`);
+                  });
+              }
+            }
           }
         } catch {
           this.log.debug(`[avail] ${ieee_address} (${modelLabel}) — ping failed`);
