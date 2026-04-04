@@ -703,17 +703,24 @@ class DeviceManager {
    * @returns {Promise<object>} resolved with confirmed state
    */
   async command(ieee_address, payload) {
-    // During startup holdoff, queue commands for any device not yet confirmed
-    // reachable this session (i.e. hasn't sent a message or passed a ping).
-    // Devices start with available=true by default, so checking availability
-    // is NOT sufficient — we need actual proof of reachability.
-    // HA gets back the current cached state optimistically; the real command
-    // fires once the device confirms reachable (or holdoff expires).
-    if (this._startupHoldoffActive && !this._confirmedReachable.has(ieee_address)) {
+    // Queue the command if the device is not yet proven reachable.
+    // Two cases:
+    //   1. Startup holdoff active + not yet confirmed reachable this session
+    //      (devices start as available=true by default — that's not proof).
+    //   2. Holdoff expired but device is currently marked unavailable
+    //      (prevents HA retry storms hitting an unreachable mesh).
+    // In both cases return the current cached state optimistically so HA
+    // gets an immediate reply. The real command is dispatched when the device
+    // first passes a ping or sends a message.
+    const _avail = this._availability.get(ieee_address);
+    const _unconfirmedDuringHoldoff = this._startupHoldoffActive && !this._confirmedReachable.has(ieee_address);
+    const _knownOffline = !this._startupHoldoffActive && _avail && !_avail.available;
+    if (_unconfirmedDuringHoldoff || _knownOffline) {
       const existing = this._startupCommandQueue.get(ieee_address) ?? {};
       this._startupCommandQueue.set(ieee_address, { ...existing, ...payload });
       const model = this._definitions.get(ieee_address)?.model ?? '?';
-      this.log.info(`[command] ${ieee_address} (${model}) queued during startup holdoff — will dispatch when device confirms reachable`);
+      const reason = _knownOffline ? 'device offline' : 'startup holdoff';
+      this.log.info(`[command] ${ieee_address} (${model}) queued (${reason}) — will dispatch when device confirms reachable`);
       return this._state.get(ieee_address) ?? {};
     }
 
@@ -958,16 +965,26 @@ class DeviceManager {
 
   /**
    * Called when the startup holdoff window expires.
-   * Force-dispatches any commands still queued (devices that never pinged back).
+   * Flushes commands for devices already confirmed reachable.
+   * Unconfirmed devices stay queued — they will be flushed when they
+   * prove reachable via ping or first message. The _knownOffline guard
+   * in command() keeps catching new HA commands for those devices.
    */
   _endStartupHoldoff() {
     this._startupHoldoffTimer  = null;
     this._startupHoldoffActive = false;
-    if (this._startupCommandQueue.size > 0) {
-      this.log.info(`[command] Startup holdoff expired — force-dispatching ${this._startupCommandQueue.size} queued command(s)`);
-      for (const ieee_address of [...this._startupCommandQueue.keys()]) {
+    let flushed = 0;
+    let retained = 0;
+    for (const ieee_address of [...this._startupCommandQueue.keys()]) {
+      if (this._confirmedReachable.has(ieee_address)) {
         this._flushStartupCommandQueue(ieee_address);
+        flushed++;
+      } else {
+        retained++;
       }
+    }
+    if (flushed > 0 || retained > 0) {
+      this.log.info(`[command] Startup holdoff expired — ${flushed} dispatched, ${retained} retained pending device recovery`);
     } else {
       this.log.info('[command] Startup holdoff expired — no queued commands');
     }
