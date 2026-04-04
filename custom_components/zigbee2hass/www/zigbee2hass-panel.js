@@ -2025,10 +2025,12 @@ class Zigbee2HASSPanel extends HTMLElement {
         this._logsFetched = true;
         this._hass.callWS({ type: 'zigbee2hass/get_logs' }).then(res => {
           const incoming = res?.logs ?? [];
-          // Prepend buffered entries; avoid duplicates from live events received
-          // while the request was in flight by prepending only older entries.
-          const merged = [...incoming, ...this._logs];
-          this._logs = merged.slice(-500);
+          // Merge: prepend historical buffer, then live entries already received.
+          // Deduplicate by ts+msg fingerprint to avoid showing the same entry
+          // twice when live events arrived while the fetch was in flight.
+          const seen = new Set(this._logs.map(e => `${e.ts}|${e.msg}`));
+          const newEntries = incoming.filter(e => !seen.has(`${e.ts}|${e.msg}`));
+          this._logs = [...newEntries, ...this._logs].slice(-500);
           this._renderLogEntries();
         }).catch(() => { /* non-fatal — show whatever live entries we have */ });
       }

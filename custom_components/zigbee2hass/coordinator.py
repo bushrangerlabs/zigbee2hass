@@ -341,6 +341,7 @@ class Zigbee2HASSCoordinator:
                 "entry_id": self.entry.entry_id,
                 "ts":       payload.get("ts"),
                 "level":    payload.get("level"),
+                "channel":  payload.get("channel"),
                 "msg":      payload.get("msg"),
             })
 
