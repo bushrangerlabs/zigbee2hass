@@ -1299,11 +1299,14 @@ class Zigbee2HASSPanel extends HTMLElement {
   _toggleEntity(entityId, turnOn) {
     const domain  = entityId.split('.')[0];
     const service = turnOn ? 'turn_on' : 'turn_off';
-    this._hass.callService(domain, service, {}, { entity_id: entityId });
+    // .catch() suppresses uncaught-promise-rejection noise in the browser
+    // console when a Zigbee command fails (e.g. NWK_NO_ROUTE); the toggle
+    // is fire-and-forget — HA state will update when the device reports back.
+    this._hass.callService(domain, service, {}, { entity_id: entityId }).catch(() => {});
   }
 
   _setBrightness(entityId, pct) {
-    this._hass.callService('light', 'turn_on', { brightness_pct: pct }, { entity_id: entityId });
+    this._hass.callService('light', 'turn_on', { brightness_pct: pct }, { entity_id: entityId }).catch(() => {});
   }
 
   _entityIcon(domain, stateObj) {

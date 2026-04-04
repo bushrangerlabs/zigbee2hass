@@ -42,6 +42,8 @@ class DeviceManager {
     this._friendlyNames = new Map();
     /** @type {Set<string>} ieee addresses for which device_ready has been emitted */
     this._deviceReadyEmitted = new Set();
+    /** @type {Set<string>} ieee addresses configured at least once this session (for configure-on-message dedup) */
+    this._configuredThisSession = new Set();
     /** @type {Map<string, NodeJS.Timeout>} "ieee:property" → reset timer for auto-clearing binary states */
     this._occupancyTimers = new Map();
 
@@ -104,14 +106,16 @@ class DeviceManager {
     const coordEp = this.zigbee.getCoordinatorEndpoint();
     const CONFIGURE_INTER_DEVICE_DELAY_MS = 3000;
 
-    // Build the list: Routers first, then mains-powered EndDevices,
-    // battery/unknown EndDevices are excluded.
+    // Build the list: all non-EndDevice devices that have a configure function.
+    // EndDevices are excluded because they are likely sleeping at startup and
+    // will be configured on their first incoming message instead.
+    // We do NOT filter by powerSource — some routers (e.g. IKEA GU10) may not
+    // have powerSource read yet, and the 3 s serial delay already prevents
+    // flooding the ZNP transmit queue regardless of device count.
     const toConfigureAtStartup = resolved.filter(({ rawDevice, definition }) => {
       if (!definition || typeof definition.configure !== 'function') return false;
       if (rawDevice.type === 'EndDevice') return false; // skip — sleeping, configure on first message
-      const isMainsPowered = rawDevice.powerSource === 'Mains (single phase)'
-                          || rawDevice.powerSource === 'Mains (3 phase)';
-      return isMainsPowered;
+      return true;
     });
 
     // Run serially in the background — doesn't block startup.
@@ -121,11 +125,13 @@ class DeviceManager {
         const { rawDevice, definition } = toConfigureAtStartup[i];
         const ieee = rawDevice.ieeeAddr;
 
-        // Skip reconfigure if device was already configured with this
-        // definition version in a previous session (prevents unnecessary
-        // ZCL traffic on clean restarts, mirrors Z2M / ioBroker behaviour).
-        const definitionVersion = definition.version ?? '0.0.0';
-        if (rawDevice.meta?.configured === definitionVersion) {
+        // Skip reconfigure if the definition carries an explicit version AND
+        // the device was already configured with that version in a previous
+        // session.  We only skip when definition.version is defined — most
+        // ZHC definitions are versionless, and Tuya devices always need the
+        // "magic packet" genBasic read on each coordinator restart regardless.
+        const definitionVersion = definition.version ?? null;
+        if (definitionVersion && rawDevice.meta?.configured === definitionVersion) {
           this.log.debug(`[devices] Startup configure for ${ieee} skipped — already at version ${definitionVersion}`);
           continue;
         }
@@ -134,8 +140,9 @@ class DeviceManager {
           await definition.configure(rawDevice, coordEp, definition);
           // Persist the configured version so we can skip next time
           if (!rawDevice.meta) rawDevice.meta = {};
-          rawDevice.meta.configured = definitionVersion;
+          if (definitionVersion) rawDevice.meta.configured = definitionVersion;
           rawDevice.save?.();
+          this._configuredThisSession.add(ieee); // prevent configure-on-message re-trigger
           this.log.info(`[devices] Startup configure for ${ieee} succeeded`);
         } catch (err) {
           this.log.debug(`[devices] Startup configure for ${ieee} skipped: ${err.message}`);
@@ -227,9 +234,9 @@ class DeviceManager {
       try {
         const coordEp = this.zigbee.getCoordinatorEndpoint();
         await definition.configure(rawDevice, coordEp, definition);
-        const definitionVersion = definition.version ?? '0.0.0';
+        const definitionVersion = definition.version ?? null;
         if (!rawDevice.meta) rawDevice.meta = {};
-        rawDevice.meta.configured = definitionVersion;
+        if (definitionVersion) rawDevice.meta.configured = definitionVersion;
         rawDevice.save?.();
         this.log.info(`[devices] Auto-configured reporting for ${ieee} on announce`);
       } catch (err) {
@@ -314,17 +321,27 @@ class DeviceManager {
     if (rawDeviceForConfigure && rawDeviceForConfigure.type === 'EndDevice') {
       const defForConfigure = this._definitions.get(ieee_address);
       if (defForConfigure && typeof defForConfigure.configure === 'function') {
-        const definitionVersion = defForConfigure.version ?? '0.0.0';
-        if (rawDeviceForConfigure.meta?.configured !== definitionVersion) {
+        const definitionVersion = defForConfigure.version ?? null;
+        // Skip if already configured this session (uses version check when
+        // definition has one, otherwise uses the session-level Set to avoid
+        // running configure on every single message from the device).
+        const alreadyDone = definitionVersion
+          ? rawDeviceForConfigure.meta?.configured === definitionVersion
+          : this._configuredThisSession.has(ieee_address);
+        if (!alreadyDone) {
           const coordEp = this.zigbee.getCoordinatorEndpoint();
+          this._configuredThisSession.add(ieee_address); // optimistic — prevents concurrent attempts
           defForConfigure.configure(rawDeviceForConfigure, coordEp, defForConfigure)
             .then(() => {
               if (!rawDeviceForConfigure.meta) rawDeviceForConfigure.meta = {};
-              rawDeviceForConfigure.meta.configured = definitionVersion;
+              if (definitionVersion) rawDeviceForConfigure.meta.configured = definitionVersion;
               rawDeviceForConfigure.save?.();
               this.log.info(`[devices] Configured ${ieee_address} on first message`);
             })
-            .catch(err => this.log.debug(`[devices] Configure-on-message skipped for ${ieee_address}: ${err.message}`));
+            .catch(err => {
+              this._configuredThisSession.delete(ieee_address); // allow retry on next message
+              this.log.debug(`[devices] Configure-on-message skipped for ${ieee_address}: ${err.message}`);
+            });
         }
       }
     }
