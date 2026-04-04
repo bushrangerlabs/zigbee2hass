@@ -53,17 +53,63 @@ const TYPE_SREQ    = 0x20;  // cmd0 bits[7:5] = 001
 const TYPE_SRSP    = 0x60;  // cmd0 bits[7:5] = 011
 const SUB_SYS      = 0x01;  // SYS subsystem
 
-const SYS_PING            = 0x01;
-const SYS_OSAL_NV_LENGTH  = 0x13;  // 19
-const SYS_OSAL_NV_READ_EXT = 0x1C; // 28
+const SYS_PING              = 0x01;
+const SYS_OSAL_NV_LENGTH    = 0x13;  // 19
+const SYS_OSAL_NV_READ_EXT  = 0x1C; // 28
+const SYS_OSAL_NV_WRITE_EXT = 0x1D; // 29
 
 // ZStack NV item IDs (NvItemsIds in zigbee-herdsman)
-const NV_NWK_ACTIVE_KEY_INFO = 58; // 0x3A — nwkKeyDescriptor: {seqNum,key[16],...}
-const NV_PRECFGKEY           = 98; // 0x62 — raw 16-byte network key
+const NV_NIB                 = 33;  // 0x21 — Network Information Base (116 bytes)
+const NV_NWK_ACTIVE_KEY_INFO = 58;  // 0x3A — nwkKeyDescriptor: {seqNum,key[16],...}
+const NV_PRECFGKEY           = 98;  // 0x62 — raw 16-byte network key
 
 // Byte offset of the 16-byte key inside nwkKeyDescriptor
 // ZStack layout: struct { uint8 seqNum; uint8 key[16]; ... }
 const NWK_KEY_DESCRIPTOR_KEY_OFFSET = 1;
+
+// NIB struct byte offsets (from herdsman structs/entries/nib.js field order)
+// See: zigbee-herdsman/dist/adapter/z-stack/structs/entries/nib.js
+//
+// Field layout (accumulated offsets):
+//   0  SequenceNum          uint8
+//   1  PassiveAckTimeout    uint8
+//   2  MaxBroadcastRetries  uint8
+//   3  MaxChildren          uint8
+//   4  MaxDepth             uint8
+//   5  MaxRouters           uint8
+//   6  dummyNeighborTable   uint8
+//   7  BroadcastDeliveryTime uint8
+//   8  ReportConstantCost   uint8
+//   9  RouteDiscRetries     uint8
+//  10  dummyRoutingTable    uint8
+//  11  SecureAllFrames      uint8
+//  12  SecurityLevel        uint8
+//  13  SymLink              uint8
+//  14  CapabilityFlags      uint8
+//  15  TransactionPersistenceTime uint16
+//  17  nwkProtocolVersion   uint8
+//  18  RouteDiscoveryTime   uint8
+//  19  RouteExpiryTime      uint8
+//  20  nwkDevAddress        uint16
+//  22  nwkLogicalChannel    uint8   ← updated from backup.channel
+//  23  nwkCoordAddress      uint16
+//  25  nwkCoordExtAddress   uint8array-reversed(8)
+//  33  nwkPanId             uint16  ← updated from backup.pan_id
+//  35  nwkState             uint8
+//  36  channelList          uint32  ← updated from 1<<backup.channel
+//  40  beaconOrder          uint8
+//  41  superFrameOrder      uint8
+//  42  scanDuration         uint8
+//  43  battLifeExt          uint8
+//  44  allocatedRouterAddresses uint32
+//  48  allocatedEndDeviceAddresses uint32
+//  52  nodeDepth            uint8
+//  53  extendedPANID        uint8array-reversed(8) ← updated from backup.extended_pan_id
+const NIB_OFFSET_LOGICAL_CHANNEL = 22;
+const NIB_OFFSET_PAN_ID          = 33;
+const NIB_OFFSET_CHANNEL_LIST    = 36;
+const NIB_OFFSET_EXTENDED_PAN_ID = 53;
+const NIB_TOTAL_SIZE             = 116;
 
 /* ── Frame helpers ───────────────────────────────────────────────────────── */
 function calcFCS(body) {
@@ -89,6 +135,16 @@ function nvReadExtFrame(nvId, offset) {
     nvId & 0xFF, (nvId >> 8) & 0xFF,
     offset & 0xFF, (offset >> 8) & 0xFF,
   ]);
+}
+
+function nvWriteExtFrame(nvId, data) {
+  const payload = [
+    nvId & 0xFF, (nvId >> 8) & 0xFF,
+    0, 0,                        // offset = 0
+    data.length & 0xFF, (data.length >> 8) & 0xFF,
+    ...data,
+  ];
+  return buildFrame(TYPE_SREQ, SUB_SYS, SYS_OSAL_NV_WRITE_EXT, payload);
 }
 
 /* ── Frame parser ────────────────────────────────────────────────────────── */
@@ -257,29 +313,147 @@ async function syncNetworkKey(config, log) {
     // Handshake: SYS_PING to confirm ZNP is responding
     await sendSREQ(sock, PING_FRAME, SYS_PING);
 
-    // Read NWK_ACTIVE_KEY_INFO (NV ID 58)
+    // ── Read NWK_ACTIVE_KEY_INFO (NV ID 58) ────────────────────────────────
     // nwkKeyDescriptor layout: byte 0 = seqNum, bytes 1-16 = key
-    const activeKey = await readKeyFromNVRam(sock, NV_NWK_ACTIVE_KEY_INFO, NWK_KEY_DESCRIPTOR_KEY_OFFSET);
+    let activeKey = await readKeyFromNVRam(sock, NV_NWK_ACTIVE_KEY_INFO, NWK_KEY_DESCRIPTOR_KEY_OFFSET);
 
     if (!activeKey) {
       // Fall back: try PRECFGKEY (NV ID 98, raw 16 bytes, no header)
       log.debug('[znp_sync] NWK_ACTIVE_KEY_INFO unreadable — trying PRECFGKEY');
-      const precfgKey = await readKeyFromNVRam(sock, NV_PRECFGKEY, 0);
-      if (!precfgKey) {
+      activeKey = await readKeyFromNVRam(sock, NV_PRECFGKEY, 0);
+      if (!activeKey) {
         log.warn('[znp_sync] Could not read network key from coordinator NVRam — skipping sync');
         sock.destroy();
         return false;
       }
-      return await applySyncedKey(precfgKey, keyFile, backupFile, log);
     }
 
-    return await applySyncedKey(activeKey, keyFile, backupFile, log);
+    // ── Read NIB and repair if corrupted ──────────────────────────────────
+    // The NIB (NV ID 33) can have panId=0 / channel=254 / channelList=0xFFFF
+    // after failed commissioning attempts overwrite PANID/CHANLIST NV items
+    // and ZStack re-loads the NIB from NVRam in an intermediate state.
+    // herdsman's determineStrategy() reads the NIB to check panId, channel,
+    // and extendedPANID. If those don't match the backup, backupMatchesAdapter
+    // = false AND configMatchesAdapter = false → startCommissioning loop.
+    // Fix: read NIB, compare against backup values, overwrite if wrong.
+    await syncNIBFromBackup(sock, backupFile, log);
+
+    // ── Sync network key files ─────────────────────────────────────────────
+    const changed = await applySyncedKey(activeKey, keyFile, backupFile, log);
+
+    sock.destroy();
+    return changed;
 
   } catch (err) {
     log.warn(`[znp_sync] Key sync failed (non-fatal): ${err.message}`);
     if (sock) sock.destroy();
     return false;
   }
+}
+
+/* ── NIB repair ─────────────────────────────────────────────────────────── */
+/**
+ * Read the coordinator's NIB (NV ID 33) and, if it has stale/zeroed values,
+ * write back the correct panId / channel / channelList / extendedPANID from
+ * coordinator_backup.json.
+ *
+ * After repair, herdsman's configMatchesAdapter (or backupMatchesAdapter +
+ * forceStart) selects "startup" instead of "startCommissioning".
+ */
+async function syncNIBFromBackup(sock, backupFile, log) {
+  // 1. Read coordinator_backup.json
+  let backup;
+  try {
+    backup = JSON.parse(fs.readFileSync(backupFile, 'utf8'));
+  } catch (err) {
+    log.debug(`[znp_sync] Could not read backup for NIB sync: ${err.message}`);
+    return;
+  }
+
+  // Parse pan_id — stored as "0x1a62" or integer
+  const rawPanId = backup.pan_id;
+  const backupPanId = typeof rawPanId === 'string'
+    ? parseInt(rawPanId.replace(/^0x/i, ''), 16)
+    : Number(rawPanId);
+
+  const backupChannel = Number(backup.channel);
+
+  // Parse extended_pan_id — hex string (16 chars) or number[]
+  const rawEpid = backup.extended_pan_id;
+  let epidBuf;
+  if (typeof rawEpid === 'string') {
+    epidBuf = Buffer.from(rawEpid.replace(/^0x/i, ''), 'hex');
+  } else if (Array.isArray(rawEpid)) {
+    epidBuf = Buffer.from(rawEpid);
+  }
+
+  if (!backupPanId || !backupChannel || !epidBuf || epidBuf.length !== 8) {
+    log.debug('[znp_sync] Backup missing pan_id/channel/extended_pan_id — skipping NIB sync');
+    return;
+  }
+
+  // 2. Read NIB from coordinator (NV ID 33 = 116 bytes)
+  const lenResp = await sendSREQ(sock, nvLengthFrame(NV_NIB), SYS_OSAL_NV_LENGTH);
+  const nibLen = lenResp.data.readUInt16LE(0);
+  if (nibLen !== NIB_TOTAL_SIZE) {
+    log.debug(`[znp_sync] NIB length ${nibLen} ≠ expected ${NIB_TOTAL_SIZE} — skipping NIB sync`);
+    return;
+  }
+
+  const readResp = await sendSREQ(sock, nvReadExtFrame(NV_NIB, 0), SYS_OSAL_NV_READ_EXT);
+  if (readResp.data[0] !== 0x00) {
+    log.debug('[znp_sync] NIB read returned non-zero status — skipping NIB sync');
+    return;
+  }
+
+  // data layout: [status(1), len(1), NIB bytes(nibLen)]
+  const nibBuf = Buffer.from(readResp.data.slice(2, 2 + nibLen));
+
+  // 3. Extract current NIB values
+  const currentPanId     = nibBuf.readUInt16LE(NIB_OFFSET_PAN_ID);
+  const currentChannel   = nibBuf[NIB_OFFSET_LOGICAL_CHANNEL];
+  const currentChList    = nibBuf.readUInt32LE(NIB_OFFSET_CHANNEL_LIST);
+  // extendedPANID is stored REVERSED in NVRam: read bytes and reverse for comparison
+  const currentEpidRaw   = nibBuf.slice(NIB_OFFSET_EXTENDED_PAN_ID, NIB_OFFSET_EXTENDED_PAN_ID + 8);
+  const currentEpid      = Buffer.from(currentEpidRaw).reverse();
+
+  const expectedChList   = 1 << backupChannel;
+  // extendedPANID stored reversed: write reversed backup epid
+  const expectedEpidRaw  = Buffer.from(epidBuf).reverse();
+
+  const panIdOk   = currentPanId   === backupPanId;
+  const channelOk = currentChannel === backupChannel;
+  const chListOk  = currentChList  === expectedChList;
+  const epidOk    = currentEpidRaw.equals(expectedEpidRaw);
+
+  if (panIdOk && channelOk && chListOk && epidOk) {
+    log.debug(`[znp_sync] NIB already correct (panId=0x${backupPanId.toString(16)}, channel=${backupChannel})`);
+    return;
+  }
+
+  // 4. Patch NIB bytes
+  const updatedNib = Buffer.from(nibBuf);
+  updatedNib.writeUInt16LE(backupPanId,    NIB_OFFSET_PAN_ID);
+  updatedNib[NIB_OFFSET_LOGICAL_CHANNEL] = backupChannel;
+  updatedNib.writeUInt32LE(expectedChList, NIB_OFFSET_CHANNEL_LIST);
+  expectedEpidRaw.copy(updatedNib, NIB_OFFSET_EXTENDED_PAN_ID);
+
+  // 5. Write updated NIB back to coordinator NVRam
+  const writeResp = await sendSREQ(
+    sock,
+    nvWriteExtFrame(NV_NIB, Array.from(updatedNib)),
+    SYS_OSAL_NV_WRITE_EXT
+  );
+  if (writeResp.data[0] !== 0x00) {
+    log.warn(`[znp_sync] NIB write returned status ${writeResp.data[0]} — coordinator may not accept NV write`);
+    return;
+  }
+
+  log.info(
+    `[znp_sync] NIB repaired: panId 0x${currentPanId.toString(16).padStart(4,'0')}→0x${backupPanId.toString(16).padStart(4,'0')}, ` +
+    `channel ${currentChannel}→${backupChannel}, ` +
+    `epid ${currentEpid.toString('hex')}→${epidBuf.toString('hex')}`
+  );
 }
 
 async function applySyncedKey(keyBuf, keyFile, backupFile, log) {
@@ -299,7 +473,7 @@ async function applySyncedKey(keyBuf, keyFile, backupFile, log) {
   } catch (_) { /* ignore — will rewrite */ }
 
   if (alreadyInSync) {
-    log.debug('[znp_sync] Files already in sync with coordinator active key');
+    log.debug('[znp_sync] Network key files already in sync with coordinator active key');
     return false;
   }
 
