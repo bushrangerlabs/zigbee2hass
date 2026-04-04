@@ -57,7 +57,10 @@ class DeviceManager {
     /** @type {Map<string, NodeJS.Timeout>} "ieee:property" → reset timer for auto-clearing binary states */
     this._occupancyTimers = new Map();
 
-    this._availabilityTimer      = null;
+    /** @type {Map<string, NodeJS.Timeout>} ieee → per-device availability ping timer */
+    this._availabilityDeviceTimers = new Map();
+    /** @type {boolean} true after grace period expires, false after stop() */
+    this._availabilityActive = false;
     this._availabilityGraceTimer = null;
     this._statePersistTimer  = null;
     this._stateFile = path.join(config.data_dir ?? '/data', 'device_state.json');
@@ -188,12 +191,8 @@ class DeviceManager {
     this._availabilityGraceTimer = setTimeout(() => {
       this._availabilityGraceTimer = null;
       this.log.info('[avail] Grace period expired — starting availability checks');
-      this._availabilityTimer = setInterval(
-        () => this._checkAvailability(),
-        this.config.availability_ping_interval * 1000
-      );
-      // Run immediately once the grace period expires
-      this._checkAvailability();
+      this._availabilityActive = true;
+      this._scheduleAllAvailabilityChecks();
     }, graceMs);
 
     // Startup command holdoff — queue set_state commands for offline devices
@@ -221,10 +220,9 @@ class DeviceManager {
       clearTimeout(this._availabilityGraceTimer);
       this._availabilityGraceTimer = null;
     }
-    if (this._availabilityTimer) {
-      clearInterval(this._availabilityTimer);
-      this._availabilityTimer = null;
-    }
+    this._availabilityActive = false;
+    for (const timer of this._availabilityDeviceTimers.values()) clearTimeout(timer);
+    this._availabilityDeviceTimers.clear();
     for (const timer of this._occupancyTimers.values()) clearTimeout(timer);
     this._occupancyTimers.clear();
   }
@@ -268,6 +266,16 @@ class DeviceManager {
     if (!this._state.has(ieee)) this._state.set(ieee, {});
     if (!this._availability.has(ieee)) this._availability.set(ieee, { available: true, last_seen: Date.now() });
     else this._availability.get(ieee).available = true;
+
+    // Start pinging this device if the startup grace period has already expired.
+    // (Devices present at startup are scheduled by _scheduleAllAvailabilityChecks;
+    // devices that announce mid-session need to be enrolled individually.)
+    if (this._availabilityActive) {
+      const isMainsPowered = rawDevice.power_source === 'Mains (single phase)'
+                          || rawDevice.power_source === 'Mains (3 phase)';
+      const isSleeping = rawDevice.type === 'EndDevice' && !isMainsPowered;
+      if (!isSleeping) this._scheduleDeviceAvailability(ieee, Math.floor(Math.random() * 5000));
+    }
 
     const definition = this._definitions.get(ieee);
     this.log.info(`[devices] Device announced: ${ieee} (${rawDevice.modelID})`);
@@ -323,6 +331,14 @@ class DeviceManager {
     }
     this._state.set(ieee, {});
     this._availability.set(ieee, { available: true, last_seen: Date.now() });
+
+    // Start pinging this newly-interviewed device if grace has already expired.
+    if (this._availabilityActive) {
+      const isMainsPowered = rawDevice.power_source === 'Mains (single phase)'
+                          || rawDevice.power_source === 'Mains (3 phase)';
+      const isSleeping = rawDevice.type === 'EndDevice' && !isMainsPowered;
+      if (!isSleeping) this._scheduleDeviceAvailability(ieee, Math.floor(Math.random() * 5000));
+    }
 
     if (definition) this._deviceReadyEmitted.add(ieee);
     this.emit('device_ready', {
@@ -859,91 +875,131 @@ class DeviceManager {
 
   // ── Availability polling ───────────────────────────────────────────────────
 
-  async _checkAvailability() {
-    const now = Date.now();
-    const timeoutMs = this.config.availability_timeout * 1000;
-
-    for (const [ieee_address, avail] of this._availability) {
+  /**
+   * Schedule availability checks for all currently-known mains-powered devices.
+   * Each device gets a random initial delay (jitter) spread across the full ping
+   * interval, then its own independent recursive setTimeout cycle.
+   *
+   * Previously a single setInterval fired for ALL devices simultaneously, creating
+   * a ping flood that overwhelmed the ZStack coordinator immediately after the grace
+   * period and caused all healthy mains-powered devices to be falsely declared
+   * offline within two check cycles (~2 × ping_interval seconds).
+   */
+  _scheduleAllAvailabilityChecks() {
+    const intervalMs = this.config.availability_ping_interval * 1000;
+    let scheduled = 0;
+    for (const [ieee_address] of this._availability) {
       const device = this.zigbee.getDevice(ieee_address);
       if (!device) continue;
-
       const isMainsPowered = device.power_source === 'Mains (single phase)'
                           || device.power_source === 'Mains (3 phase)';
-      const isSleeping     = device.type === 'EndDevice' && !isMainsPowered;
+      const isSleeping = device.type === 'EndDevice' && !isMainsPowered;
+      if (isSleeping) continue;
+      const jitter = Math.floor(Math.random() * intervalMs);
+      this._scheduleDeviceAvailability(ieee_address, jitter);
+      scheduled++;
+    }
+    this.log.info(`[avail] Scheduled ${scheduled} device(s) for availability checks (interval=${this.config.availability_ping_interval}s, staggered over ${this.config.availability_ping_interval}s)`);
+  }
 
-      if (isSleeping) {
-        // Battery/sleeping devices are silent by design — do not mark them
-        // unavailable based on silence. They only go unavailable when the bridge
-        // itself disconnects (handled by the WS disconnect path). Marking them
-        // unavailable after a silence window causes healthy door sensors, motion
-        // sensors, and remotes to appear offline after a quiet evening.
-      } else {
-        // Mains devices: actively ping the device itself (not just the coordinator)
-        const modelLabel = this._definitions.get(ieee_address)?.model ?? device.model_id ?? '?';
-        this.log.debug(`[avail] Pinging ${ieee_address} (${modelLabel})`);
-        try {
-          const latency = await this.zigbee.pingDevice(ieee_address);
-          this.log.debug(`[avail] ${ieee_address} (${modelLabel}) — online ${latency}ms`);
-          avail.last_seen = Date.now();
-          avail.failCount = 0; // reset on success
-          const wasConfirmedPing = this._confirmedReachable.has(ieee_address);
-          this._confirmedReachable.add(ieee_address);
-          if (!avail.available) {
-            avail.available = true;
-            this._availability.set(ieee_address, avail);
-            this.log.info(`[avail] ${ieee_address} (${modelLabel}) came back online (${latency}ms)`);
-            this.emit('availability_changed', { ieee_address, available: true, latency });
+  /**
+   * Schedule the next availability ping for a single device using a recursive
+   * setTimeout. Each device runs on its own independent clock — a slow or failing
+   * ping for one device has no impact on any other device's ping timing.
+   *
+   * stop() guards: the Map is cleared by stop(), so in-flight timer callbacks that
+   * check for their own entry with has() will bail out and not reschedule.
+   *
+   * @param {string} ieee_address
+   * @param {number} delayMs  how many ms until the next ping fires
+   */
+  _scheduleDeviceAvailability(ieee_address, delayMs) {
+    if (!this._availabilityActive) return;
+    if (this._availabilityDeviceTimers.has(ieee_address)) {
+      clearTimeout(this._availabilityDeviceTimers.get(ieee_address));
+    }
+    const timer = setTimeout(async () => {
+      if (!this._availabilityActive) return; // stop() called while timer was pending
+      this._availabilityDeviceTimers.delete(ieee_address);
+      await this._pingOneDevice(ieee_address);
+      // Reschedule at the full interval (jitter only applied on first run)
+      this._scheduleDeviceAvailability(ieee_address, this.config.availability_ping_interval * 1000);
+    }, delayMs);
+    this._availabilityDeviceTimers.set(ieee_address, timer);
+  }
 
-            // Retry configure if it failed at startup (route wasn't ready then).
-            // Flush queued startup commands after configure completes (so the
-            // device is fully configured before we send state commands).
-            // For devices that didn't fail configure, flush immediately.
-            if (this._configureFailedAtStartup.has(ieee_address)) {
-              this._configureFailedAtStartup.delete(ieee_address);
-              const rawDeviceForCfg = this._rawDevices.get(ieee_address);
-              const defForCfg = this._definitions.get(ieee_address);
-              if (rawDeviceForCfg && defForCfg && typeof defForCfg.configure === 'function') {
-                this.log.info(`[configure] ${ieee_address} (${modelLabel}) back online — retrying configure`);
-                const coordEp = this.zigbee.getCoordinatorEndpoint();
-                defForCfg.configure(rawDeviceForCfg, coordEp, defForCfg)
-                  .then(() => {
-                    const ver = defForCfg.version ?? null;
-                    if (!rawDeviceForCfg.meta) rawDeviceForCfg.meta = {};
-                    if (ver) rawDeviceForCfg.meta.configured = ver;
-                    rawDeviceForCfg.save?.();
-                    this._configuredThisSession.add(ieee_address);
-                    this.log.info(`[configure] ${ieee_address} (${modelLabel}) — configure-on-recovery OK`);
-                    this._flushStartupCommandQueue(ieee_address);
-                  })
-                  .catch(err => {
-                    this._configureFailedAtStartup.add(ieee_address); // allow retry on next recovery
-                    this.log.warn(`[configure] ${ieee_address} (${modelLabel}) — configure-on-recovery FAILED: ${err.message}`);
-                  });
-              } else {
+  /**
+   * Ping a single mains-powered device and update its availability state.
+   * This is the per-device equivalent of the old global loop in _checkAvailability.
+   */
+  async _pingOneDevice(ieee_address) {
+    const avail = this._availability.get(ieee_address);
+    if (!avail) return;
+    const device = this.zigbee.getDevice(ieee_address);
+    if (!device) return;
+    const modelLabel = this._definitions.get(ieee_address)?.model ?? device.model_id ?? '?';
+    this.log.debug(`[avail] Pinging ${ieee_address} (${modelLabel})`);
+    try {
+      const latency = await this.zigbee.pingDevice(ieee_address);
+      this.log.debug(`[avail] ${ieee_address} (${modelLabel}) — online ${latency}ms`);
+      avail.last_seen = Date.now();
+      avail.failCount = 0; // reset on success
+      const wasConfirmedPing = this._confirmedReachable.has(ieee_address);
+      this._confirmedReachable.add(ieee_address);
+      if (!avail.available) {
+        avail.available = true;
+        this._availability.set(ieee_address, avail);
+        this.log.info(`[avail] ${ieee_address} (${modelLabel}) came back online (${latency}ms)`);
+        this.emit('availability_changed', { ieee_address, available: true, latency });
+
+        // Retry configure if it failed at startup (route wasn't ready then).
+        // Flush queued startup commands after configure completes (so the
+        // device is fully configured before we send state commands).
+        // For devices that didn't fail configure, flush immediately.
+        if (this._configureFailedAtStartup.has(ieee_address)) {
+          this._configureFailedAtStartup.delete(ieee_address);
+          const rawDeviceForCfg = this._rawDevices.get(ieee_address);
+          const defForCfg = this._definitions.get(ieee_address);
+          if (rawDeviceForCfg && defForCfg && typeof defForCfg.configure === 'function') {
+            this.log.info(`[configure] ${ieee_address} (${modelLabel}) back online — retrying configure`);
+            const coordEp = this.zigbee.getCoordinatorEndpoint();
+            defForCfg.configure(rawDeviceForCfg, coordEp, defForCfg)
+              .then(() => {
+                const ver = defForCfg.version ?? null;
+                if (!rawDeviceForCfg.meta) rawDeviceForCfg.meta = {};
+                if (ver) rawDeviceForCfg.meta.configured = ver;
+                rawDeviceForCfg.save?.();
+                this._configuredThisSession.add(ieee_address);
+                this.log.info(`[configure] ${ieee_address} (${modelLabel}) — configure-on-recovery OK`);
                 this._flushStartupCommandQueue(ieee_address);
-              }
-            } else {
-              // No configure needed — flush any startup-queued commands directly
-              this._flushStartupCommandQueue(ieee_address);
-            }
-          } else if (!wasConfirmedPing) {
-            // Device was already marked available (typical startup default) and
-            // just passed its first ping — flush any holdoff-queued commands now
+              })
+              .catch(err => {
+                this._configureFailedAtStartup.add(ieee_address); // allow retry on next recovery
+                this.log.warn(`[configure] ${ieee_address} (${modelLabel}) — configure-on-recovery FAILED: ${err.message}`);
+              });
+          } else {
             this._flushStartupCommandQueue(ieee_address);
           }
-        } catch {
-          this.log.debug(`[avail] ${ieee_address} (${modelLabel}) — ping failed`);
-          avail.failCount = (avail.failCount ?? 0) + 1;
-          const threshold = this.config.availability_ping_failures ?? 2;
-          if (avail.available && avail.failCount >= threshold) {
-            avail.available = false;
-            this._availability.set(ieee_address, avail);
-            this.log.warn(`[avail] ${ieee_address} (${modelLabel}) went offline (${avail.failCount} consecutive ping failures)`);
-            this.emit('availability_changed', { ieee_address, available: false });
-          } else if (avail.available && avail.failCount < threshold) {
-            this.log.debug(`[avail] ${ieee_address} (${modelLabel}) — ping failed (${avail.failCount}/${threshold})`);
-          }
+        } else {
+          // No configure needed — flush any startup-queued commands directly
+          this._flushStartupCommandQueue(ieee_address);
         }
+      } else if (!wasConfirmedPing) {
+        // Device was already marked available (typical startup default) and
+        // just passed its first ping — flush any holdoff-queued commands now
+        this._flushStartupCommandQueue(ieee_address);
+      }
+    } catch {
+      this.log.debug(`[avail] ${ieee_address} (${modelLabel}) — ping failed`);
+      avail.failCount = (avail.failCount ?? 0) + 1;
+      const threshold = this.config.availability_ping_failures ?? 2;
+      if (avail.available && avail.failCount >= threshold) {
+        avail.available = false;
+        this._availability.set(ieee_address, avail);
+        this.log.warn(`[avail] ${ieee_address} (${modelLabel}) went offline (${avail.failCount} consecutive ping failures)`);
+        this.emit('availability_changed', { ieee_address, available: false });
+      } else if (avail.available && avail.failCount < threshold) {
+        this.log.debug(`[avail] ${ieee_address} (${modelLabel}) — ping failed (${avail.failCount}/${threshold})`);
       }
     }
   }
