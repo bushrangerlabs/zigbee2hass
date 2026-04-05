@@ -333,16 +333,35 @@ class ZigbeeController {
     // Fix: use ep.read with disableRecovery:false (the same default that the
     // configure commands use, which DO succeed for the same devices). This
     // allows herdsman to trigger route rediscovery before giving up.
+    //
+    // Outer retry rationale: herdsman's internal recovery sends the Zigbee
+    // RREQ broadcast (extRouteDisc) on its second attempt, then retries the
+    // data request only 3 seconds later. If the RREQ/RREP round-trip plus mesh
+    // propagation takes more than 3 seconds, the retry arrives before the route
+    // is established and also fails — even though the device IS on the network.
+    // Configure works because it issues many sequential ZCL commands, giving the
+    // RREQ multiple additional windows. We replicate that by retrying the entire
+    // herdsman call after a 5-second pause on the first failure: by then the
+    // route discovery triggered on the first attempt has had time to complete.
     const ep = device.getEndpoint(1) || device.endpoints?.[0];
     if (!ep) throw new Error(`Device ${ieeeAddr} has no endpoints`);
 
-    const start = Date.now();
-    await ep.read('genBasic', ['zclVersion'], {
+    const pingOpts = {
       disableResponse:        false,
       disableRecovery:        false,   // ← allow route re-discovery
       disableDefaultResponse: true,
       timeout:               10000,
-    });
+    };
+
+    const start = Date.now();
+    try {
+      await ep.read('genBasic', ['zclVersion'], pingOpts);
+    } catch {
+      // First attempt triggered herdsman's RREQ broadcast (extRouteDisc).
+      // Wait 5 s for the route-discovery cycle to complete, then try once more.
+      await new Promise(r => setTimeout(r, 5000));
+      await ep.read('genBasic', ['zclVersion'], pingOpts);  // throws if still unreachable
+    }
     return Date.now() - start;
   }
 
