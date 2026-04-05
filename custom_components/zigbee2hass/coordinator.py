@@ -356,16 +356,18 @@ class Zigbee2HASSCoordinator:
                 _LOGGER.error("Subscriber error for topic %s: %s", topic, exc)
 
     def _handle_bridge_devices(self, payload: dict) -> None:
-        """Full device snapshot — reconcile against current HA state."""
+        """Full device snapshot — replace local cache with fresh bridge state."""
         self.bridge_available = True
+        new_devices: dict[str, Any] = {}
         for device_data in payload.get("devices", []):
             ieee = device_data["ieee_address"]
-            self.devices[ieee] = {
+            new_devices[ieee] = {
                 "device":     device_data,
                 "definition": device_data.get("definition"),
                 "state":      device_data.get("state", {}),
                 "available":  device_data.get("available", False),
             }
+        self.devices = new_devices
 
         _LOGGER.info("Snapshot received: %d devices total", len(self.devices))
 

@@ -65,7 +65,8 @@ class DeviceManager {
     /** @type {boolean} true while startup configure loop is still running */
     this._startupConfiguring = false;
     this._statePersistTimer  = null;
-    this._stateFile = path.join(config.data_dir ?? '/data', 'device_state.json');
+    this._stateFile        = path.join(config.data_dir ?? '/data', 'device_state.json');
+    this._friendlyNameFile = path.join(config.data_dir ?? '/data', 'friendly_names.json');
   }
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -74,6 +75,8 @@ class DeviceManager {
     // Restore state from previous session so entities immediately show their
     // last-known values after an add-on restart instead of going "unknown".
     this._loadPersistedState();
+    // Load persisted friendly names (e.g. imported from Z2M migration).
+    this._loadFriendlyNames();
 
     // Load definitions for already-paired devices from herdsman database
     // findByDevice is async in zhc v25 — resolve all in parallel for speed
@@ -619,6 +622,10 @@ class DeviceManager {
     this._schedulePersistState();
     this._availability.delete(ieee_address);
     this._deviceReadyEmitted.delete(ieee_address);
+    if (this._friendlyNames.has(ieee_address)) {
+      this._friendlyNames.delete(ieee_address);
+      this._saveFriendlyNames();
+    }
     // Clear any pending occupancy reset timers for this device
     for (const key of [...this._occupancyTimers.keys()]) {
       if (key.startsWith(`${ieee_address}:`)) {
@@ -685,6 +692,33 @@ class DeviceManager {
     }, 2000); // debounce: coalesce rapid updates into one write
   }
 
+  _loadFriendlyNames() {
+    try {
+      if (!fs.existsSync(this._friendlyNameFile)) return;
+      const raw = JSON.parse(fs.readFileSync(this._friendlyNameFile, 'utf8')) ?? {};
+      let count = 0;
+      for (const [ieee, name] of Object.entries(raw)) {
+        if (typeof name === 'string' && name.trim()) {
+          this._friendlyNames.set(ieee, name.trim());
+          count++;
+        }
+      }
+      if (count > 0) this.log.info(`[devices] Loaded ${count} friendly name(s) from ${this._friendlyNameFile}`);
+    } catch (err) {
+      this.log.warn(`[devices] Could not load friendly names: ${err.message}`);
+    }
+  }
+
+  _saveFriendlyNames() {
+    try {
+      const out = {};
+      for (const [ieee, name] of this._friendlyNames) out[ieee] = name;
+      fs.writeFileSync(this._friendlyNameFile, JSON.stringify(out, null, 2), 'utf8');
+    } catch (err) {
+      this.log.warn(`[devices] Could not save friendly names: ${err.message}`);
+    }
+  }
+
   // ── State access ──────────────────────────────────────────────────────────
 
   getState(ieee_address) {
@@ -724,6 +758,7 @@ class DeviceManager {
     } else {
       this._friendlyNames.delete(ieee_address);
     }
+    this._saveFriendlyNames();
   }
 
   getFriendlyName(ieee_address) {

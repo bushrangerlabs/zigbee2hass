@@ -131,6 +131,24 @@ class Z2MMigration {
   }
 
   /**
+   * Persist a friendly-name map to /data/friendly_names.json so the
+   * DeviceManager loads them on the next startup.
+   * @param {object} deviceNames  ieee_address → friendly_name
+   * @returns {boolean}
+   */
+  persistDeviceNames(deviceNames) {
+    try {
+      const destPath = path.join(this.config.data_dir, 'friendly_names.json');
+      fs.writeFileSync(destPath, JSON.stringify(deviceNames ?? {}, null, 2), 'utf8');
+      this.log.info(`[migration] Saved ${Object.keys(deviceNames ?? {}).length} friendly name(s) to ${destPath}`);
+      return true;
+    } catch (err) {
+      this.log.error(`[migration] Failed to persist friendly names: ${err.message}`);
+      return false;
+    }
+  }
+
+  /**
    * Extract device friendly names from a Z2M data directory.
    * Checks devices.yaml first (newer Z2M), then the devices section of
    * configuration.yaml.  Uses js-yaml so all YAML quoting styles are handled.
@@ -198,6 +216,11 @@ class Z2MMigration {
       device_names: this.extractDeviceNames(z2mDataDir),
     };
 
+    if (!results.database) {
+      throw new Error('Migration failed: database.db could not be imported — devices database is required');
+    }
+
+    results.names_persisted = this.persistDeviceNames(results.device_names);
     results.device_count = Object.keys(results.device_names).length;
     this.log.info(
       `[migration] Complete — backup=${results.coordinator_backup}, db=${results.database}, names=${results.device_count}`
@@ -274,6 +297,7 @@ class Z2MMigration {
       results.device_names = this.extractNamesFromText(namesText);
     }
 
+    results.names_persisted = this.persistDeviceNames(results.device_names);
     results.device_count = Object.keys(results.device_names).length;
     this.log.info(
       `[migration] applyFiles complete — backup=${results.coordinator_backup}, db=${results.database}, names=${results.device_count}`

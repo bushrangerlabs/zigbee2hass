@@ -77,9 +77,7 @@ def async_register_services(hass: HomeAssistant) -> None:
     async def handle_migrate_z2m(call: ServiceCall) -> None:
         coordinator  = _get_coordinator(call)
         z2m_data_dir = call.data["z2m_data_dir"]
-        result = await coordinator._client.request(
-            "migrate_z2m", {"z2m_data_dir": z2m_data_dir}
-        )
+        result = await coordinator.async_migrate_z2m(z2m_data_dir)
         _LOGGER.info("Z2M migration result: %s", result)
 
     async def handle_restart(call: ServiceCall) -> None:
