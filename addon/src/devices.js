@@ -62,6 +62,8 @@ class DeviceManager {
     /** @type {boolean} true after grace period expires, false after stop() */
     this._availabilityActive = false;
     this._availabilityGraceTimer = null;
+    /** @type {boolean} true while startup configure loop is still running */
+    this._startupConfiguring = false;
     this._statePersistTimer  = null;
     this._stateFile = path.join(config.data_dir ?? '/data', 'device_state.json');
   }
@@ -132,6 +134,7 @@ class DeviceManager {
     });
 
     // Run serially in the background — doesn't block startup.
+    this._startupConfiguring = true;
     (async () => {
       const N = toConfigureAtStartup.length;
       if (N > 0) {
@@ -179,6 +182,7 @@ class DeviceManager {
         if (skipped > 0) parts.push(`${skipped} skipped`);
         this.log.info(`[configure] Startup configure complete — ${parts.join(', ')}`);
       }
+      this._startupConfiguring = false;
     })();
 
     // Start availability polling for mains-powered devices.
@@ -186,14 +190,26 @@ class DeviceManager {
     // has time to rebuild routing tables after a coordinator restart.
     // Without this, mains-powered devices lacking a direct coordinator route
     // go unavailable within 60s of startup even when the network key is correct.
+    //
+    // Extra guard: if the startup configure loop is still running when the grace
+    // period expires, defer pings by another 60s (repeatedly) until configure
+    // finishes.  Configure serialises 10-25s per device so it can run for
+    // several minutes — starting pings during that burst floods the ZNP radio
+    // and causes all devices to appear offline immediately after configure.
     const graceMs = (this.config.startup_grace_period ?? 120) * 1000;
     this.log.info(`[avail] Startup grace period — first availability check in ${graceMs / 1000}s`);
-    this._availabilityGraceTimer = setTimeout(() => {
+    const _startAvailability = () => {
       this._availabilityGraceTimer = null;
+      if (this._startupConfiguring) {
+        this.log.info('[avail] Grace period elapsed but configure still running — deferring availability checks by 60s');
+        this._availabilityGraceTimer = setTimeout(_startAvailability, 60_000);
+        return;
+      }
       this.log.info('[avail] Grace period expired — starting availability checks');
       this._availabilityActive = true;
       this._scheduleAllAvailabilityChecks();
-    }, graceMs);
+    };
+    this._availabilityGraceTimer = setTimeout(_startAvailability, graceMs);
 
     // Startup command holdoff — queue set_state commands for offline devices
     // instead of sending them immediately (HA restore-state fires within seconds
