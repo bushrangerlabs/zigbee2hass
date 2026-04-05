@@ -551,6 +551,22 @@ class DeviceManager {
 
     this.emit('state_changed', { ieee_address, state: stateUpdate, full_state: next });
 
+    // Any successfully decoded message proves the device is alive.
+    // If it was previously marked unavailable (e.g. it was a sleeping battery
+    // device that woke up before the pinger noticed, or it recovered during a
+    // brief add-on reconnect window), flip it back to available immediately
+    // and notify HA so entities recover without waiting for the next snapshot.
+    const avail = this._availability.get(ieee_address);
+    if (avail && !avail.available) {
+      avail.available = true;
+      avail.last_seen = Date.now();
+      avail.failCount = 0;
+      this._availability.set(ieee_address, avail);
+      const modelLbl = this._definitions.get(ieee_address)?.model ?? '?';
+      this.log.info(`[avail] ${ieee_address} (${modelLbl}) came back online (message received)`);
+      this.emit('availability_changed', { ieee_address, available: true });
+    }
+
     // Auto-reset occupancy/presence after timeout (these sensors only send
     // "true" — they never send "false" when the area clears)
     const occupancyTimeoutSecs = this.config.occupancy_timeout ?? 90;

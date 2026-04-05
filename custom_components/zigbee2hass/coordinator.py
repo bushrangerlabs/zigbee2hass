@@ -456,6 +456,12 @@ class Zigbee2HASSCoordinator:
         if ieee not in self.devices:
             self.devices[ieee] = {"device": {}, "definition": None, "state": {}, "available": True}
 
+        # Any incoming state message proves the device is reachable — mark it
+        # available so entities recover immediately (e.g. battery devices that
+        # woke up and sent a message during the add-on reconnect window, before
+        # the fresh snapshot arrived and restored availability).
+        self.devices[ieee]["available"] = True
+
         state_update = payload.get("state", {})
         self.devices[ieee]["state"].update(state_update)
         self._dispatch_device(ieee)
