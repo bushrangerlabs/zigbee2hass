@@ -281,7 +281,12 @@ class DeviceManager {
 
     if (!this._state.has(ieee)) this._state.set(ieee, {});
     if (!this._availability.has(ieee)) this._availability.set(ieee, { available: true, last_seen: Date.now() });
-    else this._availability.get(ieee).available = true;
+    else {
+      const avail = this._availability.get(ieee);
+      avail.available = true;
+      avail.failCount = 0;   // device just announced — clearly on the network
+      avail.last_seen = Date.now();
+    }
 
     // Start pinging this device if the startup grace period has already expired.
     // (Devices present at startup are scheduled by _scheduleAllAvailabilityChecks;
@@ -391,6 +396,7 @@ class DeviceManager {
     // Update last_seen and availability
     const avail = this._availability.get(ieee_address) ?? {};
     avail.last_seen = Date.now();
+    avail.failCount = 0;  // reset ping failure counter — device is clearly on the network
     if (!avail.available) {
       avail.available = true;
       this.emit('availability_changed', { ieee_address, available: true });
@@ -1007,6 +1013,17 @@ class DeviceManager {
       }
     } catch {
       this.log.debug(`[avail] ${ieee_address} (${modelLabel}) — ping failed`);
+      // If we heard from this device recently (message or successful ping), don't
+      // accumulate the failure — the route table just expired (ZStack volatile routing
+      // entries age out every ~5 minutes of inactivity). This is NOT the same as the
+      // device being offline. The RREQ triggered by this ping attempt will re-establish
+      // the route for the next ping cycle.
+      const lastSeenGraceMs = (this.config.availability_last_seen_grace ?? 600) * 1000;
+      const recentlySeen = avail.last_seen && (Date.now() - avail.last_seen) < lastSeenGraceMs;
+      if (recentlySeen) {
+        this.log.debug(`[avail] ${ieee_address} (${modelLabel}) — ping failed but heard within ${lastSeenGraceMs/1000}s, not counting failure (RREQ in flight)`);
+        return;
+      }
       avail.failCount = (avail.failCount ?? 0) + 1;
       const threshold = this.config.availability_ping_failures ?? 2;
       if (avail.available && avail.failCount >= threshold) {
