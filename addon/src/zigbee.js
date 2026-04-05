@@ -324,8 +324,25 @@ class ZigbeeController {
     const device = this.herdsman.getDeviceByIeeeAddr(ieeeAddr);
     if (!device) throw new Error(`Device ${ieeeAddr} not found`);
 
+    // device.ping() hardcodes disableRecovery:true, which causes herdsman to
+    // throw immediately on NWK_NO_ROUTE without attempting route re-discovery.
+    // On a post-restore mesh the ZStack route table is empty, so every device
+    // fails the first ping even though it is reachable — herdsman just never
+    // sends an RREQ because recovery is disabled.
+    //
+    // Fix: use ep.read with disableRecovery:false (the same default that the
+    // configure commands use, which DO succeed for the same devices). This
+    // allows herdsman to trigger route rediscovery before giving up.
+    const ep = device.getEndpoint(1) || device.endpoints?.[0];
+    if (!ep) throw new Error(`Device ${ieeeAddr} has no endpoints`);
+
     const start = Date.now();
-    await device.ping();
+    await ep.read('genBasic', ['zclVersion'], {
+      disableResponse:        false,
+      disableRecovery:        false,   // ← allow route re-discovery
+      disableDefaultResponse: true,
+      timeout:               10000,
+    });
     return Date.now() - start;
   }
 
