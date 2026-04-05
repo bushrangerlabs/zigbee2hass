@@ -10,6 +10,6 @@
   "issue_tracker": "https://github.com/bushrangerlabs/zigbee2hass/issues",
   "requirements": ["websockets>=12.0"],
   "ssdp": [],
-  "version": "0.1.89",
+  "version": "0.1.90",
   "zeroconf": []
 }

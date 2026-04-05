@@ -7,13 +7,22 @@ const { getLogger }  = require('./logger');
 const { isNetworkPort } = require('./config');
 
 /**
- * Extract pan_id and channel from coordinator_backup.json (any known format).
+ * Extract network parameters from coordinator_backup.json (any known format).
  *
  * Supports:
- *   open-coordinator-backup: { pan_id: "0x84bf", channel: 25, ... }
- *   old herdsman format:     { networkOptions: { panId: 34015, channelList: [25] } }
+ *   open-coordinator-backup: { pan_id: "84bf", channel: 25, channel_mask: [11],
+ *                               extended_pan_id: "7051410511934ec3",
+ *                               network_key: { key: "32eb..." } }
+ *   old herdsman format:     { networkOptions: { panId, channelList, extendedPanId,
+ *                               networkKey } }
  *
- * Returns { panId: number|null, channel: number|null }.
+ * Returns:
+ *   panId          - numeric PAN ID
+ *   channel        - operating channel (for log display)
+ *   channelMask    - number[] channel list to pass to herdsmanConfig (backup.channel_mask)
+ *   extendedPanId  - number[] byte array of extended PAN ID
+ *   networkKey     - number[] byte array of network key (null if not present)
+ * All fields null on failure.
  */
 function readBackupNetworkParams(backupFile, log) {
   try {
@@ -26,24 +35,43 @@ function readBackupNetworkParams(backupFile, log) {
         : Number(backup.pan_id);
       const channel = Number(backup.channel);
       if (panId > 0 && panId < 0xFFFF && channel >= 11 && channel <= 26) {
-        return { panId, channel };
+        // channel_mask is the channel list herdsman stores in backup.networkOptions.channelList
+        const channelMask = Array.isArray(backup.channel_mask) && backup.channel_mask.length
+          ? backup.channel_mask.map(Number)
+          : [channel];
+        // extended_pan_id as byte array
+        const extendedPanId = backup.extended_pan_id
+          ? Buffer.from(backup.extended_pan_id.replace(/^0x/i, ''), 'hex').toJSON().data
+          : null;
+        // network key as byte array
+        const networkKey = backup.network_key?.key
+          ? Buffer.from(backup.network_key.key, 'hex').toJSON().data
+          : null;
+        return { panId, channel, channelMask, extendedPanId, networkKey };
       }
     }
 
-    // old herdsman format: { networkOptions: { panId, channelList } }
+    // old herdsman format: { networkOptions: { panId, channelList, extendedPanId, networkKey } }
     if (backup.networkOptions?.panId && backup.networkOptions?.channelList?.length) {
-      const panId   = Number(backup.networkOptions.panId);
-      const channel = backup.networkOptions.channelList[0];
+      const panId       = Number(backup.networkOptions.panId);
+      const channelMask = backup.networkOptions.channelList.map(Number);
+      const channel     = channelMask[0];
       if (panId > 0 && panId < 0xFFFF && channel >= 11 && channel <= 26) {
-        return { panId, channel };
+        const extendedPanId = Array.isArray(backup.networkOptions.extendedPanId)
+          ? backup.networkOptions.extendedPanId
+          : null;
+        const networkKey = Array.isArray(backup.networkOptions.networkKey)
+          ? backup.networkOptions.networkKey
+          : null;
+        return { panId, channel, channelMask, extendedPanId, networkKey };
       }
     }
 
-    log.debug('[zigbee] coordinator_backup.json present but could not extract pan_id/channel — using config.yaml values');
+    log.debug('[zigbee] coordinator_backup.json present but could not extract network params — using config.yaml values');
   } catch (err) {
     log.debug(`[zigbee] Could not read coordinator_backup.json for network param override: ${err.message}`);
   }
-  return { panId: null, channel: null };
+  return { panId: null, channel: null, channelMask: null, extendedPanId: null, networkKey: null };
 }
 
 /**
@@ -79,36 +107,51 @@ class ZigbeeController {
 
     // ── Network parameter reconciliation ─────────────────────────────────
     // When migrating from Zigbee2MQTT the user's config.yaml almost certainly
-    // has different channel/pan_id values than the actual network (e.g. the
-    // default channel=11, pan_id=0x1a62 vs the real channel=25, pan_id=0x84bf).
+    // disagrees with the real network (e.g. config has channel=11/pan_id=0x1a62
+    // but the actual Z2M network is channel=25/pan_id=0x84bf).
     //
-    // herdsman's determineStrategy() checks configMatchesAdapter (config
-    // channel/panId/key == NVRam NIB/activeKey).  If config != adapter AND
-    // backupMatchesAdapter also fails for any reason, herdsman falls all the
-    // way through to startCommissioning — wiping the NIB and forming a NEW
-    // network with the config values, breaking all devices.
+    // herdsman determineStrategy() decision tree:
+    //   configMatchesAdapter  → startup  (fast path)
+    //   !config && backup && backupMatchesAdapter && forceStart → startup
+    //   !config && backup && !backupMatchesAdapter && configMatchesBackup → restoreBackup
+    //   otherwise → startCommissioning (DESTRUCTIVE — wipes NIB)
     //
-    // Fix: read the actual pan_id and channel from coordinator_backup.json
-    // (which reflects the real network since znp_key_sync just validated/
-    // repaired it) and inject them into herdsmanConfig.  This makes
-    // configMatchesAdapter=true and herdsman chooses "startup" directly.
+    // forceStartWithInconsistentAdapterConfiguration ONLY helps when
+    // backupMatchesAdapter is true but configMatchesAdapter is false.  When
+    // BOTH are false the only safe path is configMatchesBackup → restoreBackup.
     //
-    // We only override if the backup has valid, non-default values and the
-    // config.yaml values differ.  Log the override so it is visible.
-    let configPanId   = parseInt(this.config.pan_id, 16);
-    let configChannel = this.config.channel;
+    // Strategy:
+    //   1. Override ALL four network params from the backup so that
+    //      configMatchesBackup = true → restoreBackup (proper NV restore).
+    //   2. extendedPanID is also passed so configMatchesAdapter can fire:
+    //      herdsman checks direct + reversed byte order, so it matches
+    //      regardless of how znp_key_sync wrote the bytes into the NIB.
+    //   3. channelList = backup.channel_mask (NOT backup.channel) because
+    //      herdsman stores the scan channel list in backup.networkOptions.channelList;
+    //      the operating channel derives from the NIB's nwkLogicalChannel.
+    //
+    // This is a no-op when config.yaml already matches the backup (non-migrated installs).
+    let configPanId      = parseInt(this.config.pan_id, 16);
+    let configChannelList = [this.config.channel];
+    let configExtPanId   = null;  // null → not passed to herdsmanConfig
 
     if (fs.existsSync(backupPath)) {
-      const { panId: backupPanId, channel: backupChannel } = readBackupNetworkParams(backupPath, this.log);
-      if (backupPanId && backupChannel) {
-        if (backupPanId !== configPanId || backupChannel !== configChannel) {
+      const { panId: bPanId, channel: bChannel, channelMask: bMask, extendedPanId: bEpid }
+        = readBackupNetworkParams(backupPath, this.log);
+      if (bPanId && bChannel && bMask) {
+        const prevPanId = configPanId;
+        const prevCh    = configChannelList[0];
+        configPanId       = bPanId;
+        configChannelList = bMask;
+        configExtPanId    = bEpid;
+        if (bPanId !== prevPanId || bChannel !== prevCh) {
           this.log.info(
             `[zigbee] Network param override from coordinator_backup.json: ` +
-            `channel ${configChannel}→${backupChannel}, ` +
-            `pan_id 0x${configPanId.toString(16)}→0x${backupPanId.toString(16)}`
+            `channel ${prevCh}→${bChannel}, ` +
+            `pan_id 0x${prevPanId.toString(16)}→0x${bPanId.toString(16)}, ` +
+            `channelList [${bMask}]` +
+            (bEpid ? `, epid ${bEpid.map(b => b.toString(16).padStart(2,'0')).join('')}` : '')
           );
-          configPanId   = backupPanId;
-          configChannel = backupChannel;
         }
       }
     }
@@ -143,8 +186,9 @@ class ZigbeeController {
       },
       network: {
         panID:        configPanId,
-        channelList:  [configChannel],
+        channelList:  configChannelList,
         networkKey:   this._resolveNetworkKey(),
+        ...(configExtPanId ? { extendedPanID: configExtPanId } : {}),
       },
     };
 
